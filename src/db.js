@@ -3,15 +3,15 @@ const mongoose = require("mongoose");
 let connectPromise = null;
 
 function connectDB() {
-  if (!process.env.MONGODB_URI) {
+  if (!process.env.MONGODBLK_URI) {
     throw new Error(
-      "MONGODB_URI is not set. Point it at your MongoDB Atlas connection string — see .env"
+      "MONGODBLK_URI is not set. Point it at your MongoDB Atlas connection string — see .env"
     );
   }
 
   if (!connectPromise) {
     mongoose.set("strictQuery", true);
-    connectPromise = mongoose.connect(process.env.MONGODB_URI);
+    connectPromise = mongoose.connect(process.env.MONGODBLK_URI);
     connectPromise
       .then(() => console.log("✓ Connected to MongoDB"))
       .catch((err) => {
