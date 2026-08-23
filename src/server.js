@@ -12,7 +12,7 @@ const app = express();
 
 // Comma-separated list of allowed frontend origins, e.g.
 // FRONTEND_URL=https://your-church.netlify.app,http://localhost:3000
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000"||"https://churchcivic.netlify.app")
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000,https://churchcivic.netlify.app")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
