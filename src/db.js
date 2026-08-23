@@ -5,7 +5,7 @@ let connectPromise = null;
 function connectDB() {
   if (!process.env.MONGODB_URI) {
     throw new Error(
-      "MONGODB_URI is not set. Point it at your MongoDB Atlas connection string — see .env.example."
+      "MONGODB_URI is not set. Point it at your MongoDB Atlas connection string — see .env"
     );
   }
 
