@@ -5,6 +5,7 @@ const { connectDB } = require("./db");
 
 const authRoutes = require("./routes/auth");
 const memberRoutes = require("./routes/members");
+const childRoutes = require("./routes/children");
 const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
@@ -13,7 +14,7 @@ const app = express();
 
 // Comma-separated list of allowed frontend origins, e.g.
 // FRONTEND_URL=https://your-church.netlify.app,http://localhost:3000
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000,https://churchcivic.netlify.app")
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -33,6 +34,7 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/members", memberRoutes);
+app.use("/api/children", childRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", venueRoutes);

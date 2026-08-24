@@ -11,6 +11,11 @@ const attendanceSchema = new mongoose.Schema({
     ref: "Member",
     default: null,
   },
+  childId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Child",
+    default: null,
+  },
   visitorName: { type: String, default: null },
   visitorPhone: { type: String, default: null },
   method: { type: String, enum: ["qr", "manual", "visitor", "venue"], required: true },
@@ -32,6 +37,13 @@ const attendanceSchema = new mongoose.Schema({
 attendanceSchema.index(
   { serviceId: 1, memberId: 1 },
   { unique: true, partialFilterExpression: { memberId: { $type: "objectId" } } }
+);
+
+// Same protection for children — a child can't be recorded twice for the
+// same service either.
+attendanceSchema.index(
+  { serviceId: 1, childId: 1 },
+  { unique: true, partialFilterExpression: { childId: { $type: "objectId" } } }
 );
 
 module.exports = mongoose.model("Attendance", attendanceSchema);

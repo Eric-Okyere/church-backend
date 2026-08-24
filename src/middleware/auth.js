@@ -15,6 +15,27 @@ function signToken(user) {
   );
 }
 
+// Signed with a DIFFERENT key (derived from JWT_SECRET, not JWT_SECRET
+// itself) so a venue token can never be verified by requireAuth below, even
+// by accident — the two token types are cryptographically distinct, not
+// just distinguished by a claim someone could try to forge. A venue token
+// only ever proves "this is the member who passed the venue self-check-in's
+// location + phone verification a moment ago" — nothing more.
+function venueSecret() {
+  return `${requireEnvSecret()}|venue`;
+}
+
+function signVenueToken(memberId) {
+  return jwt.sign({ sub: memberId, purpose: "venue" }, venueSecret(), { expiresIn: "15m" });
+}
+
+// Returns the memberId it was issued for, or throws if invalid/expired.
+function verifyVenueToken(token) {
+  const payload = jwt.verify(token, venueSecret());
+  if (payload.purpose !== "venue") throw new Error("wrong token purpose");
+  return payload.sub;
+}
+
 // Verifies the Bearer token and attaches { id, name, username, role } to req.user.
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -43,4 +64,4 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { signToken, requireAuth, requireAdmin };
+module.exports = { signToken, requireAuth, requireAdmin, signVenueToken, verifyVenueToken };
