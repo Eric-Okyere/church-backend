@@ -7,6 +7,7 @@ const authRoutes = require("./routes/auth");
 const memberRoutes = require("./routes/members");
 const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
+const venueRoutes = require("./routes/venue");
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/members", memberRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
+app.use("/api", venueRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });

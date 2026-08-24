@@ -13,7 +13,15 @@ const attendanceSchema = new mongoose.Schema({
   },
   visitorName: { type: String, default: null },
   visitorPhone: { type: String, default: null },
-  method: { type: String, enum: ["qr", "manual", "visitor"], required: true },
+  method: { type: String, enum: ["qr", "manual", "visitor", "venue"], required: true },
+  // Only set for method: "venue" — the GPS coordinates reported by the
+  // member's own phone at the moment they self-checked-in via the posted
+  // QR code, kept for audit purposes (e.g. investigating a disputed
+  // check-in). Never required, and never shown back to the member.
+  location: {
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null },
+  },
   checkedInAt: { type: Date, default: Date.now },
 });
 

@@ -1,4 +1,5 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const QRCode = require("qrcode");
 const Member = require("../models/Member");
 const Attendance = require("../models/Attendance");
@@ -6,6 +7,31 @@ const { requireAuth } = require("../middleware/auth");
 const { newQrToken } = require("../lib/utils");
 
 const router = express.Router();
+
+const lookupLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { members: [] },
+});
+
+// GET /api/members/lookup?q=...  — PUBLIC, no auth.
+// Powers the venue self-check-in page: lets a member find their own name
+// after scanning the posted QR code. Deliberately returns ONLY id + name —
+// never phone — because the phone number is the identity-confirmation
+// secret on the next step, so it must never be visible in a public
+// response (that would defeat the whole point of asking for it).
+router.get("/lookup", lookupLimiter, async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (q.length < 2) return res.json({ members: [] });
+
+  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const members = await Member.find({ active: true, name: re }).limit(8).select("name");
+
+  res.json({ members: members.map((m) => ({ id: m.id, name: m.name })) });
+});
+
 router.use(requireAuth);
 
 function serialize(m) {

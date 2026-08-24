@@ -2,7 +2,7 @@ const jwt = require("jsonwebtoken");
 
 function requireEnvSecret() {
   if (!process.env.JWT_SECRET) {
-    throw new Error("JWT_SECRET is not set — see .env");
+    throw new Error("JWT_SECRET is not set — see .env.example.");
   }
   return process.env.JWT_SECRET;
 }

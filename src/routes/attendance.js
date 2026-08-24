@@ -1,10 +1,16 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const rateLimit = require("express-rate-limit");
 const Member = require("../models/Member");
 const Service = require("../models/Service");
 const Attendance = require("../models/Attendance");
 const { requireAuth } = require("../middleware/auth");
-const { checkInByToken, checkInMemberManually, checkInVisitor } = require("../lib/attendance");
+const {
+  checkInByToken,
+  checkInMemberManually,
+  checkInVisitor,
+  checkInMemberAtVenue,
+} = require("../lib/attendance");
 
 const router = express.Router();
 
@@ -14,6 +20,37 @@ router.post("/attendance/checkin", async (req, res) => {
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ ok: false, reason: "invalid_token" });
   const result = await checkInByToken(token);
+  res.json(result);
+});
+
+// --- Public: the venue self-check-in page a posted QR code opens ---------
+// A tighter limit than most public endpoints here — this is the one that
+// takes a phone number and checks it against a specific member record, so
+// it's the one worth throttling against someone trying to guess a phone
+// number to falsely check another member in.
+const venueCheckinLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, reason: "rate_limited" },
+});
+
+// POST /api/attendance/venue-checkin  { memberId, phone, lat, lng }
+router.post("/attendance/venue-checkin", venueCheckinLimiter, async (req, res) => {
+  const memberId = String(req.body?.memberId || "").trim();
+  const phone = String(req.body?.phone || "").trim();
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+
+  if (!memberId || !phone) {
+    return res.status(400).json({ ok: false, reason: "invalid_request" });
+  }
+  if (!mongoose.isValidObjectId(memberId)) {
+    return res.json({ ok: false, reason: "invalid_member" });
+  }
+
+  const result = await checkInMemberAtVenue(memberId, phone, lat, lng);
   res.json(result);
 });
 
