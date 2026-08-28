@@ -18,6 +18,9 @@ const attendanceSchema = new mongoose.Schema({
   },
   visitorName: { type: String, default: null },
   visitorPhone: { type: String, default: null },
+  // Denormalized from the service at creation time so per-church reporting
+  // (dashboard counts, CSV export) never needs to join through serviceId.
+  churchId: { type: mongoose.Schema.Types.ObjectId, ref: "Church", required: true, index: true },
   method: { type: String, enum: ["qr", "manual", "visitor", "venue"], required: true },
   // Only set for method: "venue" — the GPS coordinates reported by the
   // member's own phone at the moment they self-checked-in via the posted

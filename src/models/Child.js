@@ -12,6 +12,11 @@ const childSchema = new mongoose.Schema({
   parentMemberId: { type: mongoose.Schema.Types.ObjectId, ref: "Member", required: true },
   qrToken: { type: String, required: true, unique: true },
   active: { type: Boolean, default: true },
+  // Denormalized from the parent Member at creation time — lets every
+  // children query filter by churchId directly instead of joining through
+  // parentMemberId first, and is a second, independent check (alongside
+  // the parent-ownership check) against a child ever crossing tenants.
+  churchId: { type: mongoose.Schema.Types.ObjectId, ref: "Church", required: true, index: true },
   createdAt: { type: Date, default: Date.now },
 });
 

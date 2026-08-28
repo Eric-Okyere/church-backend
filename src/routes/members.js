@@ -4,6 +4,7 @@ const QRCode = require("qrcode");
 const Member = require("../models/Member");
 const Child = require("../models/Child");
 const Attendance = require("../models/Attendance");
+const Church = require("../models/Church");
 const { requireAuth } = require("../middleware/auth");
 const { newQrToken } = require("../lib/utils");
 
@@ -17,18 +18,24 @@ const lookupLimiter = rateLimit({
   message: { members: [] },
 });
 
-// GET /api/members/lookup?q=...  — PUBLIC, no auth.
+// GET /api/members/lookup?church=<slug>&q=...  — PUBLIC, no auth.
 // Powers the venue self-check-in page: lets a member find their own name
-// after scanning the posted QR code. Deliberately returns ONLY id + name —
-// never phone — because the phone number is the identity-confirmation
-// secret on the next step, so it must never be visible in a public
-// response (that would defeat the whole point of asking for it).
+// after scanning the posted QR code. Requires a church slug (the poster QR
+// encodes /venue/<slug>, and the page passes it through here) so this can
+// never search across every church on the platform — without it, a
+// congregation of one church could type another church's member's name and
+// find them. Deliberately returns ONLY id + name — never phone — because
+// the phone number is the identity-confirmation secret on the next step.
 router.get("/lookup", lookupLimiter, async (req, res) => {
+  const churchSlug = String(req.query.church || "").trim().toLowerCase();
   const q = String(req.query.q || "").trim();
-  if (q.length < 2) return res.json({ members: [] });
+  if (!churchSlug || q.length < 2) return res.json({ members: [] });
+
+  const church = await Church.findOne({ slug: churchSlug, active: true });
+  if (!church) return res.json({ members: [] });
 
   const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-  const members = await Member.find({ active: true, name: re }).limit(8).select("name");
+  const members = await Member.find({ churchId: church.id, active: true, name: re }).limit(8).select("name");
 
   res.json({ members: members.map((m) => ({ id: m.id, name: m.name })) });
 });
@@ -97,9 +104,21 @@ function serializeChild(c) {
   return { id: c.id, name: c.name, active: c.active, createdAt: c.createdAt };
 }
 
+// Fetches a member by id, but ONLY if it belongs to the caller's church —
+// used everywhere a route takes a member id, so one church's admin can
+// never read/edit/deactivate/rotate-QR another church's member just by
+// guessing or reusing an id. Returns null for "not found" AND "found but
+// someone else's" identically, so a cross-tenant probe can't even tell
+// those two cases apart.
+async function findOwnMember(id, churchId) {
+  const member = await Member.findById(id).catch(() => null);
+  if (!member || String(member.churchId) !== String(churchId)) return null;
+  return member;
+}
+
 // GET /api/members?active=true|false
 router.get("/", async (req, res) => {
-  const filter = {};
+  const filter = { churchId: req.user.churchId };
   if (req.query.active === "true") filter.active = true;
   if (req.query.active === "false") filter.active = false;
   const members = await Member.find(filter).sort({ name: 1 });
@@ -114,6 +133,7 @@ router.get("/search", async (req, res) => {
 
   const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   const members = await Member.find({
+    churchId: req.user.churchId,
     active: true,
     $or: [{ name: re }, { phone: re }],
   }).limit(10);
@@ -122,7 +142,7 @@ router.get("/search", async (req, res) => {
 });
 
 router.get("/:id", async (req, res) => {
-  const member = await Member.findById(req.params.id).catch(() => null);
+  const member = await findOwnMember(req.params.id, req.user.churchId);
   if (!member) return res.status(404).json({ error: "Member not found." });
   res.json({ member: serialize(member) });
 });
@@ -142,6 +162,7 @@ router.post("/", async (req, res) => {
     phone: phone || null,
     email: email || null,
     qrToken: newQrToken(),
+    churchId: req.user.churchId,
     ...optional,
   });
 
@@ -157,42 +178,42 @@ router.patch("/:id", async (req, res) => {
   const [optional, errors] = readOptionalFields(req.body);
   if (errors.length) return res.status(400).json({ error: errors.join(" ") });
 
+  const owned = await findOwnMember(req.params.id, req.user.churchId);
+  if (!owned) return res.status(404).json({ error: "Member not found." });
+
   const member = await Member.findByIdAndUpdate(
     req.params.id,
     { name, phone: phone || null, email: email || null, ...optional },
     { new: true }
-  ).catch(() => null);
-  if (!member) return res.status(404).json({ error: "Member not found." });
-
+  );
   res.json({ member: serialize(member) });
 });
 
 router.post("/:id/deactivate", async (req, res) => {
-  const member = await Member.findByIdAndUpdate(req.params.id, { active: false }, { new: true }).catch(() => null);
-  if (!member) return res.status(404).json({ error: "Member not found." });
+  const owned = await findOwnMember(req.params.id, req.user.churchId);
+  if (!owned) return res.status(404).json({ error: "Member not found." });
+  const member = await Member.findByIdAndUpdate(req.params.id, { active: false }, { new: true });
   res.json({ member: serialize(member) });
 });
 
 router.post("/:id/reactivate", async (req, res) => {
-  const member = await Member.findByIdAndUpdate(req.params.id, { active: true }, { new: true }).catch(() => null);
-  if (!member) return res.status(404).json({ error: "Member not found." });
+  const owned = await findOwnMember(req.params.id, req.user.churchId);
+  if (!owned) return res.status(404).json({ error: "Member not found." });
+  const member = await Member.findByIdAndUpdate(req.params.id, { active: true }, { new: true });
   res.json({ member: serialize(member) });
 });
 
 router.post("/:id/regenerate-qr", async (req, res) => {
-  const member = await Member.findByIdAndUpdate(
-    req.params.id,
-    { qrToken: newQrToken() },
-    { new: true }
-  ).catch(() => null);
-  if (!member) return res.status(404).json({ error: "Member not found." });
+  const owned = await findOwnMember(req.params.id, req.user.churchId);
+  if (!owned) return res.status(404).json({ error: "Member not found." });
+  const member = await Member.findByIdAndUpdate(req.params.id, { qrToken: newQrToken() }, { new: true });
   res.json({ member: serialize(member) });
 });
 
 // GET /api/members/:id/qrcode — a ready-to-display/download PNG data URL
 // encoding this member's check-in link (the frontend's /c/[token] page).
 router.get("/:id/qrcode", async (req, res) => {
-  const member = await Member.findById(req.params.id).catch(() => null);
+  const member = await findOwnMember(req.params.id, req.user.churchId);
   if (!member) return res.status(404).json({ error: "Member not found." });
 
   const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:3000").split(",")[0].trim();
@@ -204,7 +225,10 @@ router.get("/:id/qrcode", async (req, res) => {
 
 // GET /api/members/:id/attendance — this member's check-in history.
 router.get("/:id/attendance", async (req, res) => {
-  const rows = await Attendance.find({ memberId: req.params.id })
+  const owned = await findOwnMember(req.params.id, req.user.churchId);
+  if (!owned) return res.status(404).json({ error: "Member not found." });
+
+  const rows = await Attendance.find({ memberId: req.params.id, churchId: req.user.churchId })
     .sort({ checkedInAt: -1 })
     .limit(20)
     .populate("serviceId", "name date");
@@ -227,19 +251,26 @@ router.get("/:id/attendance", async (req, res) => {
 
 // GET /api/members/:memberId/children
 router.get("/:memberId/children", async (req, res) => {
-  const children = await Child.find({ parentMemberId: req.params.memberId }).sort({ name: 1 });
+  const parent = await findOwnMember(req.params.memberId, req.user.churchId);
+  if (!parent) return res.status(404).json({ error: "Member not found." });
+  const children = await Child.find({ parentMemberId: parent.id, churchId: req.user.churchId }).sort({ name: 1 });
   res.json({ children: children.map(serializeChild) });
 });
 
 // POST /api/members/:memberId/children  { name }
 router.post("/:memberId/children", async (req, res) => {
-  const parent = await Member.findById(req.params.memberId).catch(() => null);
+  const parent = await findOwnMember(req.params.memberId, req.user.churchId);
   if (!parent) return res.status(404).json({ error: "Member not found." });
 
   const name = String(req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "Child's name is required." });
 
-  const child = await Child.create({ name, parentMemberId: parent.id, qrToken: newQrToken() });
+  const child = await Child.create({
+    name,
+    parentMemberId: parent.id,
+    qrToken: newQrToken(),
+    churchId: req.user.churchId,
+  });
   res.status(201).json({ child: serializeChild(child) });
 });
 

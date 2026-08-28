@@ -2,15 +2,9 @@ const Member = require("../models/Member");
 const Child = require("../models/Child");
 const Service = require("../models/Service");
 const Attendance = require("../models/Attendance");
+const Church = require("../models/Church");
 const { distanceMeters } = require("./geo");
 const { signVenueToken, verifyVenueToken } = require("../middleware/auth");
-
-// The church's location and how far (in meters) a member's phone is allowed
-// to be from it for the venue self-check-in to succeed. Required for
-// verifyVenueMember — everything else in this file works without them.
-const CHURCH_LAT = Number(process.env.CHURCH_LATITUDE);
-const CHURCH_LNG = Number(process.env.CHURCH_LONGITUDE);
-const CHURCH_RADIUS_METERS = Number(process.env.CHURCH_CHECKIN_RADIUS_METERS) || 200;
 
 function normalizePhone(raw) {
   return String(raw || "").replace(/\D/g, "");
@@ -30,8 +24,11 @@ function phonesMatch(a, b) {
   return da.slice(-TAIL) === db.slice(-TAIL);
 }
 
-async function getActiveService() {
-  return Service.findOne({ status: "active" });
+// "The active service" only ever means "the active service for THIS
+// church" — multiple churches can each have one running at the same time,
+// so churchId is required here, never optional.
+async function getActiveService(churchId) {
+  return Service.findOne({ status: "active", churchId });
 }
 
 // Shared by every check-in path: catches the duplicate-key error from the
@@ -59,7 +56,13 @@ async function recordCheckIn(service, name, method, who, extra = {}) {
     return { ok: true, alreadyIn: true, memberName: name, serviceId: service.id, serviceName: service.name };
   }
 
-  const inserted = await insertAttendance({ serviceId: service.id, method, ...who, ...extra });
+  const inserted = await insertAttendance({
+    serviceId: service.id,
+    churchId: service.churchId,
+    method,
+    ...who,
+    ...extra,
+  });
   return { ok: true, alreadyIn: !inserted, memberName: name, serviceId: service.id, serviceName: service.name };
 }
 
@@ -67,19 +70,31 @@ async function recordCheckIn(service, name, method, who, extra = {}) {
 // QR code works everywhere a member's does (kiosk scan, or opening the
 // /c/[token] link directly), since a young child obviously can't go through
 // the venue self-check-in's phone-number identity check themselves.
-async function checkInByToken(qrToken) {
-  const service = await getActiveService();
-  if (!service) return { ok: false, reason: "no_active_service" };
-
-  const member = await Member.findOne({ qrToken });
+//
+// `expectedChurchId`, when given, restricts the lookup to that church —
+// used by the admin-authenticated kiosk scan so it can never resolve a
+// token belonging to a different church (even though qrTokens are random
+// and globally unique in practice, this is the defense-in-depth check that
+// makes it structurally impossible, not just unlikely). The public
+// /c/[token] page (no login, just the personal QR itself) omits it — the
+// token IS the credential there, and the church is derived FROM whichever
+// record it resolves to, not asserted up front.
+async function checkInByToken(qrToken, expectedChurchId) {
+  const memberFilter = expectedChurchId ? { qrToken, churchId: expectedChurchId } : { qrToken };
+  const member = await Member.findOne(memberFilter);
   if (member) {
     if (!member.active) return { ok: false, reason: "inactive_member" };
+    const service = await getActiveService(member.churchId);
+    if (!service) return { ok: false, reason: "no_active_service" };
     return recordCheckIn(service, member.name, "qr", { memberId: member.id });
   }
 
-  const child = await Child.findOne({ qrToken });
+  const childFilter = expectedChurchId ? { qrToken, churchId: expectedChurchId } : { qrToken };
+  const child = await Child.findOne(childFilter);
   if (child) {
     if (!child.active) return { ok: false, reason: "inactive_member" };
+    const service = await getActiveService(child.churchId);
+    if (!service) return { ok: false, reason: "no_active_service" };
     return recordCheckIn(service, child.name, "qr", { childId: child.id });
   }
 
@@ -91,25 +106,33 @@ async function checkInByToken(qrToken) {
 // attendance can be recorded, which is intentional: it requires an
 // authenticated admin/usher session (enforced by requireAuth on the route),
 // and only an admin/usher is allowed to check in someone other than
-// themselves or their own children.
-async function checkInPersonManually({ memberId, childId, serviceId }) {
-  const service = await Service.findById(serviceId);
-  if (!service) return { ok: false, reason: "no_active_service" };
+// themselves or their own children. `churchId` (the admin's own) is
+// required and re-verified against the service/member/child here — never
+// trust that the memberId/childId/serviceId the client sent actually
+// belongs to the caller's church.
+async function checkInPersonManually({ memberId, childId, serviceId }, churchId) {
+  const service = await Service.findById(serviceId).catch(() => null);
+  if (!service || String(service.churchId) !== String(churchId)) return { ok: false, reason: "no_active_service" };
 
   if (memberId) {
     const member = await Member.findById(memberId).catch(() => null);
-    if (!member) return { ok: false, reason: "invalid_token" };
+    if (!member || String(member.churchId) !== String(churchId)) return { ok: false, reason: "invalid_token" };
     return recordCheckIn(service, member.name, "manual", { memberId: member.id });
   }
 
   const child = await Child.findById(childId).catch(() => null);
-  if (!child) return { ok: false, reason: "invalid_token" };
+  if (!child || String(child.churchId) !== String(churchId)) return { ok: false, reason: "invalid_token" };
   return recordCheckIn(service, child.name, "manual", { childId: child.id });
 }
 
-async function checkInVisitor(serviceId, visitorName, visitorPhone) {
+async function checkInVisitor(serviceId, visitorName, visitorPhone, churchId) {
+  const service = await Service.findById(serviceId).catch(() => null);
+  if (!service || String(service.churchId) !== String(churchId)) {
+    throw Object.assign(new Error("Service not found."), { status: 404 });
+  }
   await Attendance.create({
     serviceId,
+    churchId,
     visitorName,
     visitorPhone: visitorPhone || null,
     method: "visitor",
@@ -119,8 +142,10 @@ async function checkInVisitor(serviceId, visitorName, visitorPhone) {
 // --- Venue self-check-in (the posted QR code members scan on-site) -------
 //
 // A member here has no account/login, so two things stand in for one:
-//   1. Their phone's GPS must place them within CHURCH_RADIUS_METERS of the
-//      church — checked first, before touching any member-specific data.
+//   1. Their phone's GPS must place them within their OWN CHURCH's
+//      configured radius of that church's coordinates (set by that
+//      church's admin on the Settings page, not a global env var — each
+//      church has its own) — checked before touching phone data.
 //   2. They must type the full phone number already on file for themselves
 //      — proves it's actually them.
 // Passing both mints a short-lived venue token (see middleware/auth.js —
@@ -130,29 +155,35 @@ async function checkInVisitor(serviceId, visitorName, visitorPhone) {
 // action in this venue session — checking the member in, checking in one of
 // their children — requires that token and is restricted to that one
 // member and that member's own registered children. There is no way to
-// check in an unrelated member through this flow: identity is verified
-// once, and everything after is scoped to who was verified, not to
-// whatever memberId/childId happens to be in the request body.
+// check in an unrelated member (of this church OR any other church)
+// through this flow: identity is verified once, and everything after is
+// scoped to who was verified, not to whatever memberId/childId happens to
+// be in the request body.
 async function verifyVenueMember(memberId, phone, lat, lng) {
-  if (!Number.isFinite(CHURCH_LAT) || !Number.isFinite(CHURCH_LNG)) {
+  const member = await Member.findById(memberId).catch(() => null);
+  if (!member) return { ok: false, reason: "invalid_member" };
+  if (!member.active) return { ok: false, reason: "inactive_member" };
+
+  const church = await Church.findById(member.churchId).catch(() => null);
+  if (!church || !Number.isFinite(church.latitude) || !Number.isFinite(church.longitude)) {
     return { ok: false, reason: "not_configured" };
   }
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return { ok: false, reason: "invalid_location" };
   }
-  if (distanceMeters(CHURCH_LAT, CHURCH_LNG, lat, lng) > CHURCH_RADIUS_METERS) {
+  const radius = Number.isFinite(church.radiusMeters) && church.radiusMeters > 0 ? church.radiusMeters : 200;
+  if (distanceMeters(church.latitude, church.longitude, lat, lng) > radius) {
     return { ok: false, reason: "out_of_range" };
   }
 
-  const service = await getActiveService();
+  const service = await getActiveService(member.churchId);
   if (!service) return { ok: false, reason: "no_active_service" };
 
-  const member = await Member.findById(memberId).catch(() => null);
-  if (!member) return { ok: false, reason: "invalid_member" };
-  if (!member.active) return { ok: false, reason: "inactive_member" };
   if (!phonesMatch(phone, member.phone)) return { ok: false, reason: "identity_mismatch" };
 
-  const children = await Child.find({ parentMemberId: member.id, active: true }).sort({ name: 1 });
+  const children = await Child.find({ parentMemberId: member.id, churchId: member.churchId, active: true }).sort({
+    name: 1,
+  });
 
   return {
     ok: true,
@@ -174,11 +205,11 @@ async function checkInSelfAtVenue(venueToken, lat, lng) {
   const memberId = resolveVenueMemberId(venueToken);
   if (!memberId) return { ok: false, reason: "session_expired" };
 
-  const service = await getActiveService();
-  if (!service) return { ok: false, reason: "no_active_service" };
-
   const member = await Member.findById(memberId).catch(() => null);
   if (!member || !member.active) return { ok: false, reason: "invalid_member" };
+
+  const service = await getActiveService(member.churchId);
+  if (!service) return { ok: false, reason: "no_active_service" };
 
   const location = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
   return recordCheckIn(service, member.name, "venue", { memberId: member.id }, location && { location });
@@ -186,18 +217,20 @@ async function checkInSelfAtVenue(venueToken, lat, lng) {
 
 // Only checks in a child whose parentMemberId matches the member the venue
 // token was issued to — this is the enforcement point for "a parent can
-// check in their children, not anyone else's".
+// check in their children, not anyone else's" (and, transitively, never a
+// child from a different church, since a child's parentMemberId can only
+// ever point to a member of its own church).
 async function checkInChildAtVenue(venueToken, childId, lat, lng) {
   const memberId = resolveVenueMemberId(venueToken);
   if (!memberId) return { ok: false, reason: "session_expired" };
-
-  const service = await getActiveService();
-  if (!service) return { ok: false, reason: "no_active_service" };
 
   const child = await Child.findById(childId).catch(() => null);
   if (!child) return { ok: false, reason: "invalid_member" };
   if (String(child.parentMemberId) !== String(memberId)) return { ok: false, reason: "not_your_child" };
   if (!child.active) return { ok: false, reason: "inactive_member" };
+
+  const service = await getActiveService(child.churchId);
+  if (!service) return { ok: false, reason: "no_active_service" };
 
   const location = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
   return recordCheckIn(service, child.name, "venue", { childId: child.id }, location && { location });

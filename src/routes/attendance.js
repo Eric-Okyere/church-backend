@@ -18,6 +18,9 @@ const router = express.Router();
 
 // --- Public: the page a member's (or child's) QR code opens (no auth) ----
 // POST /api/attendance/checkin  { token }
+// No churchId to scope by here — the token itself is the credential, and
+// checkInByToken derives which church it belongs to from whatever record
+// it resolves to.
 router.post("/attendance/checkin", async (req, res) => {
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ ok: false, reason: "invalid_token" });
@@ -42,7 +45,9 @@ const venueLimiter = rateLimit({
 // Verifies location + phone-number identity, and on success returns a
 // short-lived venue token plus the member's own registered children. This
 // is the ONLY step that checks a phone number — everything after it is
-// scoped to the member this token was issued for.
+// scoped to the member this token was issued for. No churchId in the
+// request body — verifyVenueMember resolves the member's own church
+// (and that church's own GPS coverage area) from the member record itself.
 router.post("/attendance/venue-verify", venueLimiter, async (req, res) => {
   const memberId = String(req.body?.memberId || "").trim();
   const phone = String(req.body?.phone || "").trim();
@@ -89,17 +94,22 @@ router.post("/attendance/venue-checkin-child", venueLimiter, async (req, res) =>
 // themselves — the manual/scan paths below have no restriction on whose
 // attendance they record, which is exactly what "only admin can check in
 // more than one member" means in practice: it's gated by requireAuth, not
-// by any per-person check.
+// by any per-person check. Every route below is additionally scoped to
+// req.user.churchId, so an admin/usher can only ever act on their own
+// church's members, children, and services.
 router.use(requireAuth);
 
 // POST /api/attendance/scan  { token }  — used by the kiosk camera scanner.
 // Accepts either a bare token or the full https://.../c/<token> URL a QR
 // code actually encodes. Works for both member and child QR codes.
+// Restricted to the scanning admin/usher's own church — scanning a QR code
+// that happens to belong to a different church's member/child resolves as
+// invalid_token, not a cross-tenant check-in.
 router.post("/attendance/scan", async (req, res) => {
   const raw = String(req.body?.token || "").trim();
   if (!raw) return res.status(400).json({ ok: false, reason: "invalid_token" });
   const token = raw.includes("/c/") ? raw.split("/c/").pop().split(/[?#]/)[0] : raw;
-  const result = await checkInByToken(token);
+  const result = await checkInByToken(token, req.user.churchId);
   res.json(result);
 });
 
@@ -109,7 +119,7 @@ router.post("/attendance/manual", async (req, res) => {
   if ((!memberId && !childId) || !serviceId) {
     return res.status(400).json({ ok: false, reason: "invalid_token" });
   }
-  const result = await checkInPersonManually({ memberId, childId, serviceId });
+  const result = await checkInPersonManually({ memberId, childId, serviceId }, req.user.churchId);
   res.json(result);
 });
 
@@ -120,12 +130,17 @@ router.post("/attendance/visitor", async (req, res) => {
   if (!serviceId || !name) {
     return res.status(400).json({ error: "Visitor name is required." });
   }
-  await checkInVisitor(serviceId, name, phone || "");
+  try {
+    await checkInVisitor(serviceId, name, phone || "", req.user.churchId);
+  } catch (err) {
+    if (err.status === 404) return res.status(404).json({ error: "Service not found." });
+    throw err;
+  }
   res.status(201).json({ success: true });
 });
 
-async function loadAttendanceRows(serviceId) {
-  return Attendance.find({ serviceId })
+async function loadAttendanceRows(serviceId, churchId) {
+  return Attendance.find({ serviceId, churchId })
     .sort({ checkedInAt: -1 })
     .populate("memberId", "name phone")
     .populate("childId", "name");
@@ -144,15 +159,21 @@ function rowToRecord(a) {
   };
 }
 
+// Fetches a service by id, but ONLY if it belongs to the caller's church.
+async function findOwnService(id, churchId) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  const service = await Service.findById(id).catch(() => null);
+  if (!service || String(service.churchId) !== String(churchId)) return null;
+  return service;
+}
+
 // GET /api/services/:id/attendance
 router.get("/services/:id/attendance", async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return res.status(404).json({ error: "Service not found." });
-  }
-  const service = await Service.findById(req.params.id);
-  const rows = await loadAttendanceRows(req.params.id);
+  const service = await findOwnService(req.params.id, req.user.churchId);
+  if (!service) return res.status(404).json({ error: "Service not found." });
+  const rows = await loadAttendanceRows(req.params.id, req.user.churchId);
   res.json({
-    service: service ? { id: service.id, name: service.name, date: service.date, status: service.status } : null,
+    service: { id: service.id, name: service.name, date: service.date, status: service.status },
     count: rows.length,
     attendance: rows.map(rowToRecord),
   });
@@ -160,11 +181,9 @@ router.get("/services/:id/attendance", async (req, res) => {
 
 // GET /api/services/:id/attendance/csv
 router.get("/services/:id/attendance/csv", async (req, res) => {
-  if (!mongoose.isValidObjectId(req.params.id)) {
-    return res.status(404).json({ error: "Service not found." });
-  }
-  const service = await Service.findById(req.params.id);
-  const rows = await loadAttendanceRows(req.params.id);
+  const service = await findOwnService(req.params.id, req.user.churchId);
+  if (!service) return res.status(404).json({ error: "Service not found." });
+  const rows = await loadAttendanceRows(req.params.id, req.user.churchId);
 
   const header = "Name,Phone,Child,Method,Checked In At\n";
   const body = rows
@@ -176,20 +195,24 @@ router.get("/services/:id/attendance/csv", async (req, res) => {
     })
     .join("\n");
 
-  const filename = `${(service?.name ?? "service").replace(/[^a-z0-9]+/gi, "_")}_attendance.csv`;
+  const filename = `${service.name.replace(/[^a-z0-9]+/gi, "_")}_attendance.csv`;
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(header + body);
 });
 
-// GET /api/dashboard — everything the admin dashboard page needs in one call.
+// GET /api/dashboard — everything the admin dashboard page needs in one
+// call, all scoped to req.user.churchId — one church's dashboard never
+// includes another church's services, members, or counts.
 router.get("/dashboard", async (req, res) => {
-  const activeService = await Service.findOne({ status: "active" });
-  const activeCount = activeService ? await Attendance.countDocuments({ serviceId: activeService.id }) : 0;
-  const memberCount = await Member.countDocuments({ active: true });
-  const recentServices = await Service.find().sort({ createdAt: -1 }).limit(6);
+  const churchId = req.user.churchId;
+  const activeService = await Service.findOne({ status: "active", churchId });
+  const activeCount = activeService ? await Attendance.countDocuments({ serviceId: activeService.id, churchId }) : 0;
+  const memberCount = await Member.countDocuments({ active: true, churchId });
+  const recentServices = await Service.find({ churchId }).sort({ createdAt: -1 }).limit(6);
 
   const counts = await Attendance.aggregate([
+    { $match: { churchId } },
     { $group: { _id: "$serviceId", count: { $sum: 1 } } },
   ]);
   const countMap = new Map(counts.map((c) => [String(c._id), c.count]));

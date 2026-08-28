@@ -1,3 +1,5 @@
+const dns = require("dns");
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 require("dotenv/config");
 const express = require("express");
 const cors = require("cors");
@@ -9,6 +11,7 @@ const childRoutes = require("./routes/children");
 const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
+const churchRoutes = require("./routes/churches");
 
 const app = express();
 
@@ -38,7 +41,7 @@ app.use("/api/children", childRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", venueRoutes);
-
+app.use("/api/churches", churchRoutes);
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
 });

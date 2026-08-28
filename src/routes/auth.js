@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
+const Church = require("../models/Church");
 const { signToken, requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -23,7 +24,13 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid username or password." });
   }
 
-  const token = signToken({ id: user.id, name: user.name, username: user.username, role: user.role });
+  const token = signToken({
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    role: user.role,
+    churchId: user.churchId,
+  });
   res.json({
     token,
     user: { id: user.id, name: user.name, username: user.username, role: user.role },
@@ -37,8 +44,11 @@ router.post("/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
+router.get("/me", requireAuth, async (req, res) => {
+  const church = await Church.findById(req.user.churchId).catch(() => null);
+  res.json({
+    user: { ...req.user, churchName: church ? church.name : null },
+  });
 });
 
 module.exports = router;

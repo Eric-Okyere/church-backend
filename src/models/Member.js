@@ -6,6 +6,9 @@ const memberSchema = new mongoose.Schema({
   email: { type: String, default: null, trim: true },
   qrToken: { type: String, required: true, unique: true },
   active: { type: Boolean, default: true },
+  // Every query against this collection MUST filter by churchId — this is
+  // what keeps one church's members invisible to every other church.
+  churchId: { type: mongoose.Schema.Types.ObjectId, ref: "Church", required: true, index: true },
 
   // Everything below is entirely optional — a member record is complete
   // with just a name. These exist for churches that want to keep richer

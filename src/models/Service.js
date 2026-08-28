@@ -8,6 +8,10 @@ const serviceSchema = new mongoose.Schema({
     enum: ["scheduled", "active", "ended"],
     default: "scheduled",
   },
+  // Multiple churches can each have their own "active" service running at
+  // the same time — "the active service" only ever means "the active
+  // service for THIS church", so every lookup filters by churchId too.
+  churchId: { type: mongoose.Schema.Types.ObjectId, ref: "Church", required: true, index: true },
   createdAt: { type: Date, default: Date.now },
 });
 

@@ -9,7 +9,7 @@ function requireEnvSecret() {
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user.id, name: user.name, username: user.username, role: user.role },
+    { sub: user.id, name: user.name, username: user.username, role: user.role, churchId: user.churchId },
     requireEnvSecret(),
     { expiresIn: "30d" }
   );
@@ -45,11 +45,19 @@ function requireAuth(req, res, next) {
   }
   try {
     const payload = jwt.verify(token, requireEnvSecret());
+    if (!payload.churchId) {
+      // A token minted before multi-tenancy (or otherwise missing its
+      // church) can't be scoped to anything — treat it as invalid rather
+      // than letting it fall through with an undefined churchId, which
+      // would silently match no rows (fail-closed, not fail-open).
+      return res.status(401).json({ error: "Your session has expired — please sign in again." });
+    }
     req.user = {
       id: payload.sub,
       name: payload.name,
       username: payload.username,
       role: payload.role,
+      churchId: payload.churchId,
     };
     next();
   } catch {
