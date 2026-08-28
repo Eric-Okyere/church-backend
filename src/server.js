@@ -6,12 +6,12 @@ const cors = require("cors");
 const { connectDB } = require("./db");
 
 const authRoutes = require("./routes/auth");
+const churchRoutes = require("./routes/churches");
 const memberRoutes = require("./routes/members");
 const childRoutes = require("./routes/children");
 const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
-const churchRoutes = require("./routes/churches");
 
 const app = express();
 
@@ -36,12 +36,12 @@ app.use(express.json());
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.use("/api/auth", authRoutes);
+app.use("/api", churchRoutes);
 app.use("/api/members", memberRoutes);
 app.use("/api/children", childRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", venueRoutes);
-app.use("/api/churches", churchRoutes);
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
 });
