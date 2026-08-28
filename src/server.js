@@ -10,6 +10,7 @@ const childRoutes = require("./routes/children");
 const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
+const analyticsRoutes = require("./routes/analytics");
 
 const app = express();
 
@@ -41,7 +42,7 @@ app.use(express.json());
 app.get("/health", (req, res) =>
   res.json({
     ok: true,
-    features: ["multi-tenant", "venue-phone-checkin"],
+    features: ["multi-tenant", "venue-phone-checkin", "service-analytics"],
   })
 );
 
@@ -52,6 +53,10 @@ app.use("/api/children", childRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", venueRoutes);
+// Exclusive prefix — analyticsRoutes owns "/api/analytics" and nothing else,
+// so its router.use(requireAuth) can never accidentally gate a route from
+// another router the way it would on a shared prefix like "/api".
+app.use("/api/analytics", analyticsRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
