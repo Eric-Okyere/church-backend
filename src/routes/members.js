@@ -42,6 +42,7 @@ router.get("/lookup", lookupLimiter, async (req, res) => {
 
 router.use(requireAuth);
 
+const GENDERS = ["Male", "Female"];
 const MARITAL_STATUSES = ["single", "married", "divorced", "widowed", "separated"];
 const JOB_STATUSES = ["employed", "unemployed", "self_employed", "student"];
 const DEPARTMENTS = ["Youth", "Children", "Men", "Leader", "Women"];
@@ -63,6 +64,7 @@ function pickEnum(value, allowed, label, errors) {
 function readOptionalFields(body) {
   const errors = [];
   const fields = {
+    gender: pickEnum(body?.gender, GENDERS, "Gender", errors),
     maritalStatus: pickEnum(body?.maritalStatus, MARITAL_STATUSES, "Marital status", errors),
     jobStatus: pickEnum(body?.jobStatus, JOB_STATUSES, "Job status", errors),
     department: pickEnum(body?.department, DEPARTMENTS, "Department", errors),
@@ -89,6 +91,7 @@ function serialize(m) {
     email: m.email,
     qrToken: m.qrToken,
     active: m.active,
+    gender: m.gender,
     maritalStatus: m.maritalStatus,
     jobStatus: m.jobStatus,
     emergencyContactName: m.emergencyContactName,

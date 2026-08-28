@@ -14,6 +14,11 @@ const memberSchema = new mongoose.Schema({
   // with just a name. These exist for churches that want to keep richer
   // profiles; the UI presents them as an optional "additional details"
   // section rather than requiring them up front.
+  gender: {
+    type: String,
+    enum: ["Male", "Female"],
+    default: null,
+  },
   maritalStatus: {
     type: String,
     enum: ["single", "married", "divorced", "widowed", "separated"],
