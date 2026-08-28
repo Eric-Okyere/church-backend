@@ -1,5 +1,3 @@
-const dns = require("dns");
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
 require("dotenv/config");
 const express = require("express");
 const cors = require("cors");
@@ -33,7 +31,19 @@ app.use(
 );
 app.use(express.json());
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+// `features` is a small, deliberately manual checklist — not auto-derived
+// from anything — of behavior changes that are otherwise invisible from
+// outside the server (a client can't tell "old venue-verify contract" from
+// "new one" except by trying it and seeing which fields it wants). Visiting
+// this in a browser or `curl`ing it after a deploy is the fast way to
+// confirm Render is actually running the code you just pushed, without
+// needing to exercise the full check-in flow to find out.
+app.get("/health", (req, res) =>
+  res.json({
+    ok: true,
+    features: ["multi-tenant", "venue-phone-checkin"],
+  })
+);
 
 app.use("/api/auth", authRoutes);
 app.use("/api", churchRoutes);
@@ -42,6 +52,7 @@ app.use("/api/children", childRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", venueRoutes);
+
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
 });

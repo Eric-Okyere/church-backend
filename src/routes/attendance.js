@@ -4,6 +4,7 @@ const rateLimit = require("express-rate-limit");
 const Member = require("../models/Member");
 const Service = require("../models/Service");
 const Attendance = require("../models/Attendance");
+const Church = require("../models/Church");
 const { requireAuth } = require("../middleware/auth");
 const {
   checkInByToken,
@@ -41,23 +42,27 @@ const venueLimiter = rateLimit({
   message: { ok: false, reason: "rate_limited" },
 });
 
-// POST /api/attendance/venue-verify  { memberId, phone, lat, lng }
-// Verifies location + phone-number identity, and on success returns a
-// short-lived venue token plus the member's own registered children. This
-// is the ONLY step that checks a phone number — everything after it is
-// scoped to the member this token was issued for. No churchId in the
-// request body — verifyVenueMember resolves the member's own church
-// (and that church's own GPS coverage area) from the member record itself.
+// POST /api/attendance/venue-verify  { slug, phone, lat, lng }
+// Verifies location + looks the member up directly by phone number within
+// that one church — no separate "search your name" step. This is the ONLY
+// step that touches a phone number — everything after it is scoped to the
+// member this token was issued for. `slug` (from the /venue/<slug> link,
+// never a churchId asserted directly by the client) is how the church is
+// resolved — verifyVenueMember never trusts a client-supplied churchId.
 router.post("/attendance/venue-verify", venueLimiter, async (req, res) => {
-  const memberId = String(req.body?.memberId || "").trim();
+  const slug = String(req.body?.slug || "")
+    .trim()
+    .toLowerCase();
   const phone = String(req.body?.phone || "").trim();
   const lat = Number(req.body?.lat);
   const lng = Number(req.body?.lng);
 
-  if (!memberId || !phone) return res.status(400).json({ ok: false, reason: "invalid_request" });
-  if (!mongoose.isValidObjectId(memberId)) return res.json({ ok: false, reason: "invalid_member" });
+  if (!slug || !phone) return res.status(400).json({ ok: false, reason: "invalid_request" });
 
-  const result = await verifyVenueMember(memberId, phone, lat, lng);
+  const church = await Church.findOne({ slug, active: true }).catch(() => null);
+  if (!church) return res.json({ ok: false, reason: "unknown_church" });
+
+  const result = await verifyVenueMember(church.id, phone, lat, lng);
   res.json(result);
 });
 

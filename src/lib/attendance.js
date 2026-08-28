@@ -31,6 +31,30 @@ async function getActiveService(churchId) {
   return Service.findOne({ status: "active", churchId });
 }
 
+// Finds the one active member in `churchId` whose phone number matches
+// (by the same tolerant last-8-digit comparison used everywhere else),
+// scoped to that church so a phone number can never resolve to a member of
+// a different church. Loads only phone+name+_id — this runs on every venue
+// self-check-in attempt, so it stays cheap even for a large congregation.
+//
+// Deliberately does NOT try to narrow the DB query with a regex on the
+// phone field first — an earlier version did (`phone: { $regex: tail+'$' }`),
+// but that's anchored on the raw stored string, so any formatting in a
+// member's saved phone number (a space, a dash, a "+233" prefix instead of
+// a leading 0) could make the last 8 CHARACTERS of the string not equal the
+// last 8 DIGITS, silently excluding a real match before phonesMatch() ever
+// got a chance to run its tolerant comparison. Filtering every active
+// member of the church in JS is a little more work per request, but it's
+// correct regardless of how phone numbers happen to be formatted in the
+// database, and a single church's active-member count is small enough that
+// this is still cheap.
+async function findMemberByPhoneInChurch(churchId, phone) {
+  const digits = normalizePhone(phone);
+  if (digits.length < 8) return null;
+  const candidates = await Member.find({ churchId, active: true }).select("_id name phone");
+  return candidates.find((m) => phonesMatch(phone, m.phone)) || null;
+}
+
 // Shared by every check-in path: catches the duplicate-key error from the
 // partial unique indexes (serviceId+memberId, serviceId+childId) as a
 // graceful "already checked in" rather than a 500, in case of a race
@@ -141,30 +165,31 @@ async function checkInVisitor(serviceId, visitorName, visitorPhone, churchId) {
 
 // --- Venue self-check-in (the posted QR code members scan on-site) -------
 //
-// A member here has no account/login, so two things stand in for one:
+// A member here has no account/login, so their phone number IS how they
+// identify themselves — there's no separate "search for your name first"
+// step, both because it's one less thing to type on a phone at the door,
+// and because it means the page never shows a stranger a list of member
+// names to browse. Two things stand in for a login:
 //   1. Their phone's GPS must place them within their OWN CHURCH's
 //      configured radius of that church's coordinates (set by that
 //      church's admin on the Settings page, not a global env var — each
-//      church has its own) — checked before touching phone data.
-//   2. They must type the full phone number already on file for themselves
-//      — proves it's actually them.
+//      church has its own) — checked before ever touching phone/member
+//      data, so a bad phone number can't be used to probe whether it's
+//      registered at all without also being on-site.
+//   2. Their phone number must match a member already on file *at this
+//      specific church* — churchId (resolved server-side from the /venue/
+//      <slug> link's slug, never client-asserted) scopes the lookup so the
+//      same phone number can never resolve to a member of a different
+//      church.
 // Passing both mints a short-lived venue token (see middleware/auth.js —
 // signed with a DIFFERENT key derived from JWT_SECRET, so it can never be
 // used to authenticate as an admin/usher even if someone tried it against
 // an admin-only route) scoped to exactly that member. Every subsequent
 // action in this venue session — checking the member in, checking in one of
 // their children — requires that token and is restricted to that one
-// member and that member's own registered children. There is no way to
-// check in an unrelated member (of this church OR any other church)
-// through this flow: identity is verified once, and everything after is
-// scoped to who was verified, not to whatever memberId/childId happens to
-// be in the request body.
-async function verifyVenueMember(memberId, phone, lat, lng) {
-  const member = await Member.findById(memberId).catch(() => null);
-  if (!member) return { ok: false, reason: "invalid_member" };
-  if (!member.active) return { ok: false, reason: "inactive_member" };
-
-  const church = await Church.findById(member.churchId).catch(() => null);
+// member and that member's own registered children.
+async function verifyVenueMember(churchId, phone, lat, lng) {
+  const church = await Church.findById(churchId).catch(() => null);
   if (!church || !Number.isFinite(church.latitude) || !Number.isFinite(church.longitude)) {
     return { ok: false, reason: "not_configured" };
   }
@@ -176,12 +201,13 @@ async function verifyVenueMember(memberId, phone, lat, lng) {
     return { ok: false, reason: "out_of_range" };
   }
 
-  const service = await getActiveService(member.churchId);
+  const service = await getActiveService(church.id);
   if (!service) return { ok: false, reason: "no_active_service" };
 
-  if (!phonesMatch(phone, member.phone)) return { ok: false, reason: "identity_mismatch" };
+  const member = await findMemberByPhoneInChurch(church.id, phone);
+  if (!member) return { ok: false, reason: "not_found" };
 
-  const children = await Child.find({ parentMemberId: member.id, churchId: member.churchId, active: true }).sort({
+  const children = await Child.find({ parentMemberId: member.id, churchId: church.id, active: true }).sort({
     name: 1,
   });
 
