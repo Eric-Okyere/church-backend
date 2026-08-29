@@ -42,7 +42,7 @@ app.use(express.json());
 app.get("/health", (req, res) =>
   res.json({
     ok: true,
-    features: ["multi-tenant", "venue-phone-checkin", "service-analytics", "service-demographics"],
+    features: ["multi-tenant", "venue-phone-checkin", "service-analytics", "service-demographics", "admin-only-qr-checkin"],
   })
 );
 

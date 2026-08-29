@@ -17,15 +17,21 @@ const {
 
 const router = express.Router();
 
-// --- Public: the page a member's (or child's) QR code opens (no auth) ----
+// --- Admin/usher only: the page a member's (or child's) personal QR code
+// opens ---------------------------------------------------------------
 // POST /api/attendance/checkin  { token }
-// No churchId to scope by here — the token itself is the credential, and
-// checkInByToken derives which church it belongs to from whatever record
-// it resolves to.
-router.post("/attendance/checkin", async (req, res) => {
+// A member's/child's printed or displayed QR code encodes a plain link to
+// this page — which means anyone's phone camera app (not just the in-app
+// kiosk scanner) can open it. requireAuth here is what stops that: only a
+// signed-in admin/usher session can actually check someone in this way.
+// Everyone else gets a 401, which the frontend shows as "see an usher"
+// rather than silently checking the person in. Scoped to the caller's own
+// church, same as the in-app kiosk scanner (`/attendance/scan` below) —
+// an admin can never check in another church's member this way either.
+router.post("/attendance/checkin", requireAuth, async (req, res) => {
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ ok: false, reason: "invalid_token" });
-  const result = await checkInByToken(token);
+  const result = await checkInByToken(token, req.user.churchId);
   res.json(result);
 });
 
