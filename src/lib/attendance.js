@@ -219,6 +219,37 @@ async function verifyVenueMember(churchId, phone, lat, lng) {
   };
 }
 
+// --- Admin/usher on-premises check ---------------------------------------
+//
+// Reuses the exact same coordinates + radius a church already sets on its
+// Settings page for venue self-check-in (Church.latitude/longitude/
+// radiusMeters) — there's only ever one "the church's premises" per church,
+// not a separate value for members vs. staff. Called before every admin/
+// usher action that records someone's attendance (QR kiosk scan, manual
+// check-in, the personal-QR link, adding a walk-in visitor).
+//
+// A church that hasn't configured GPS yet (both null — the schema default)
+// is deliberately left UNENFORCED rather than locked out: there's nothing
+// to check the admin's phone against, and failing closed the moment this
+// ships would break check-in for every church that hasn't visited Settings
+// yet. Once a church sets its coordinates, this starts enforcing
+// immediately for that church, same as venue self-check-in already does.
+async function verifyAdminAtChurch(churchId, lat, lng) {
+  const church = await Church.findById(churchId).catch(() => null);
+  if (!church || !Number.isFinite(church.latitude) || !Number.isFinite(church.longitude)) {
+    return { ok: true, enforced: false };
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { ok: false, reason: "location_required" };
+  }
+  const radius = Number.isFinite(church.radiusMeters) && church.radiusMeters > 0 ? church.radiusMeters : 200;
+  const distance = distanceMeters(church.latitude, church.longitude, lat, lng);
+  if (distance > radius) {
+    return { ok: false, reason: "out_of_range", distanceMeters: Math.round(distance) };
+  }
+  return { ok: true, enforced: true };
+}
+
 function resolveVenueMemberId(venueToken) {
   try {
     return verifyVenueToken(venueToken);
@@ -270,4 +301,5 @@ module.exports = {
   checkInSelfAtVenue,
   checkInChildAtVenue,
   getActiveService,
+  verifyAdminAtChurch,
 };
