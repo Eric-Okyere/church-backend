@@ -147,8 +147,67 @@ router.post("/attendance/visitor", async (req, res) => {
 async function loadAttendanceRows(serviceId, churchId) {
   return Attendance.find({ serviceId, churchId })
     .sort({ checkedInAt: -1 })
-    .populate("memberId", "name phone")
+    .populate("memberId", "name phone gender department")
     .populate("childId", "name");
+}
+
+const DEMOGRAPHIC_GENDERS = ["Male", "Female"];
+const DEMOGRAPHIC_DEPARTMENTS = ["Youth", "Children", "Men", "Leader", "Women"];
+// Same fixed order as the analytics page's check-in-method chart — never
+// re-sorted by count, so a method keeps its color/position as numbers change.
+const DEMOGRAPHIC_METHODS = [
+  { method: "qr", label: "QR scan" },
+  { method: "manual", label: "Manual" },
+  { method: "venue", label: "Self check-in" },
+  { method: "visitor", label: "Visitor" },
+];
+
+// Breaks a service's attendance rows down by who attended: total plus
+// members/children/visitors, gender (members only — children and visitors
+// have no gender on file), department (members only, from the same fixed
+// list used on the member profile form), and check-in method. Only ever
+// called with rows already scoped to one service + churchId by the caller.
+function buildDemographics(rows) {
+  let members = 0;
+  let children = 0;
+  let visitors = 0;
+  const genderCounts = { Male: 0, Female: 0, "Not specified": 0 };
+  const deptCounts = Object.fromEntries(DEMOGRAPHIC_DEPARTMENTS.map((d) => [d, 0]));
+  deptCounts["No department"] = 0;
+  const methodCounts = Object.fromEntries(DEMOGRAPHIC_METHODS.map((m) => [m.method, 0]));
+
+  for (const a of rows) {
+    const member = a.memberId && typeof a.memberId === "object" ? a.memberId : null;
+    const child = a.childId && typeof a.childId === "object" ? a.childId : null;
+    if (member) {
+      members++;
+      if (member.gender === "Male" || member.gender === "Female") genderCounts[member.gender]++;
+      else genderCounts["Not specified"]++;
+      if (DEMOGRAPHIC_DEPARTMENTS.includes(member.department)) deptCounts[member.department]++;
+      else deptCounts["No department"]++;
+    } else if (child) {
+      children++;
+    } else {
+      visitors++;
+    }
+    if (methodCounts[a.method] !== undefined) methodCounts[a.method]++;
+  }
+
+  const gender = DEMOGRAPHIC_GENDERS.map((label) => ({ label, count: genderCounts[label] }));
+  if (genderCounts["Not specified"] > 0) gender.push({ label: "Not specified", count: genderCounts["Not specified"] });
+
+  const department = DEMOGRAPHIC_DEPARTMENTS.map((label) => ({ label, count: deptCounts[label] }));
+  if (deptCounts["No department"] > 0) department.push({ label: "No department", count: deptCounts["No department"] });
+
+  return {
+    total: rows.length,
+    members,
+    children,
+    visitors,
+    gender,
+    department,
+    method: DEMOGRAPHIC_METHODS.map((m) => ({ label: m.label, count: methodCounts[m.method] })),
+  };
 }
 
 function rowToRecord(a) {
@@ -181,6 +240,7 @@ router.get("/services/:id/attendance", async (req, res) => {
     service: { id: service.id, name: service.name, date: service.date, status: service.status },
     count: rows.length,
     attendance: rows.map(rowToRecord),
+    demographics: buildDemographics(rows),
   });
 });
 
