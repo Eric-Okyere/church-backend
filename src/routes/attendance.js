@@ -274,16 +274,75 @@ async function findOwnService(id, churchId) {
   return service;
 }
 
+// "Present"/"absent" is scoped to the church's registered, active member
+// roster — the group a person can meaningfully be marked absent FROM.
+// Children and visitors have no such roster (a visitor was never expected
+// to show up, and a child's attendance is tracked through their parent),
+// so they show up separately (see `extractVisitors` below), not in this
+// list. Named lists (not just counts) are what let an admin actually call
+// or WhatsApp a specific absent member to check on them, and a present
+// member to say thanks for coming — the counts-only version from the
+// previous round didn't support that.
+async function buildRoster(rows, churchId) {
+  const checkedInAtByMemberId = new Map();
+  for (const a of rows) {
+    const member = a.memberId && typeof a.memberId === "object" ? a.memberId : null;
+    if (member) checkedInAtByMemberId.set(String(member._id), a.checkedInAt);
+  }
+
+  // Every active member on the church's roster, name-sorted so both lists
+  // read predictably rather than shuffling on every poll.
+  const allActiveMembers = await Member.find({ churchId, active: true })
+    .select("name phone")
+    .sort({ name: 1 });
+
+  const presentMembers = [];
+  const absentMembers = [];
+  for (const m of allActiveMembers) {
+    const checkedInAt = checkedInAtByMemberId.get(String(m._id));
+    const entry = { id: m.id, name: m.name, phone: m.phone ?? null };
+    if (checkedInAt) presentMembers.push({ ...entry, checkedInAt });
+    else absentMembers.push(entry);
+  }
+
+  return {
+    totalActiveMembers: allActiveMembers.length,
+    present: presentMembers.length,
+    absent: absentMembers.length,
+    presentMembers,
+    absentMembers,
+  };
+}
+
+// Visitors are already excluded from the member roster above (they were
+// never expected on it) — this pulls them out as their own named list, so
+// an admin can call/WhatsApp a visitor to follow up same as a member.
+function extractVisitors(rows) {
+  return rows
+    .filter((a) => !(a.memberId && typeof a.memberId === "object") && !(a.childId && typeof a.childId === "object"))
+    .map((a) => ({
+      id: a.id,
+      name: a.visitorName || "Unknown",
+      phone: a.visitorPhone || null,
+      checkedInAt: a.checkedInAt,
+    }));
+}
+
 // GET /api/services/:id/attendance
 router.get("/services/:id/attendance", async (req, res) => {
   const service = await findOwnService(req.params.id, req.user.churchId);
   if (!service) return res.status(404).json({ error: "Service not found." });
   const rows = await loadAttendanceRows(req.params.id, req.user.churchId);
+  const demographics = buildDemographics(rows);
+  const roster = await buildRoster(rows, req.user.churchId);
+  const visitors = extractVisitors(rows);
   res.json({
     service: { id: service.id, name: service.name, date: service.date, status: service.status },
     count: rows.length,
     attendance: rows.map(rowToRecord),
-    demographics: buildDemographics(rows),
+    demographics,
+    roster,
+    visitors,
   });
 });
 
@@ -292,7 +351,9 @@ router.get("/services/:id/attendance/csv", async (req, res) => {
   const service = await findOwnService(req.params.id, req.user.churchId);
   if (!service) return res.status(404).json({ error: "Service not found." });
   const rows = await loadAttendanceRows(req.params.id, req.user.churchId);
+  const roster = await buildRoster(rows, req.user.churchId);
 
+  const summary = `Present,${roster.present}\nAbsent,${roster.absent}\nActive members,${roster.totalActiveMembers}\n\n`;
   const header = "Name,Phone,Child,Method,Checked In At\n";
   const body = rows
     .map((a) => {
@@ -306,7 +367,7 @@ router.get("/services/:id/attendance/csv", async (req, res) => {
   const filename = `${service.name.replace(/[^a-z0-9]+/gi, "_")}_attendance.csv`;
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.send(header + body);
+  res.send(summary + header + body);
 });
 
 // GET /api/dashboard — everything the admin dashboard page needs in one

@@ -49,6 +49,8 @@ app.get("/health", (req, res) =>
       "service-demographics",
       "admin-only-qr-checkin",
       "admin-premises-checkin",
+      "service-present-absent-roster",
+      "service-roster-named-lists",
     ],
   })
 );
