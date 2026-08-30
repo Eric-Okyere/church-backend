@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const Service = require("../models/Service");
 const Attendance = require("../models/Attendance");
 const Member = require("../models/Member");
@@ -25,8 +26,14 @@ router.get("/services", async (req, res) => {
   const recent = await Service.find({ churchId }).sort({ createdAt: -1 }).limit(12);
   const services = [...recent].reverse();
 
+  // See the /api/dashboard route in attendance.js for why churchId must be
+  // cast to an ObjectId here — aggregate()'s $match doesn't auto-cast the
+  // way .find()/.countDocuments() do, so without this every count below
+  // would silently come back zero.
+  const churchObjectId = new mongoose.Types.ObjectId(churchId);
+
   const counts = await Attendance.aggregate([
-    { $match: { churchId } },
+    { $match: { churchId: churchObjectId } },
     { $group: { _id: "$serviceId", count: { $sum: 1 } } },
   ]);
   const countByService = new Map(counts.map((c) => [String(c._id), c.count]));
@@ -40,7 +47,7 @@ router.get("/services", async (req, res) => {
   }));
 
   const methodCounts = await Attendance.aggregate([
-    { $match: { churchId } },
+    { $match: { churchId: churchObjectId } },
     { $group: { _id: "$method", count: { $sum: 1 } } },
   ]);
   const countByMethod = new Map(methodCounts.map((m) => [m._id, m.count]));

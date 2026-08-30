@@ -31,6 +31,18 @@ const attendanceSchema = new mongoose.Schema({
     lng: { type: Number, default: null },
   },
   checkedInAt: { type: Date, default: Date.now },
+  // Who actually performed this check-in, when it was an admin/usher acting
+  // on someone else's behalf (kiosk scan, manual search, adding a walk-in
+  // visitor, or opening a personal-QR link while signed in) — null for every
+  // self-service path (venue self-check-in, venue child check-in, a visitor
+  // checking themselves in via the posted QR). Useful when more than one
+  // usher is covering the kiosk under pressure and it's not obvious later
+  // who checked a given person in. Name is denormalized alongside the id
+  // (same pattern as churchId elsewhere on this model) so displaying it
+  // never needs a populate — a User being renamed later doesn't rewrite
+  // history, which is the intended, audit-log-like behavior here.
+  checkedInByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  checkedInByName: { type: String, default: null },
 });
 
 // Belt-and-suspenders: even though the route logic checks for an existing

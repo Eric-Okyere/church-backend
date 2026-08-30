@@ -10,6 +10,7 @@ const {
   checkInByToken,
   checkInPersonManually,
   checkInVisitor,
+  checkInVisitorAtVenue,
   verifyVenueMember,
   checkInSelfAtVenue,
   checkInChildAtVenue,
@@ -54,7 +55,7 @@ router.post("/attendance/checkin", requireAuth, async (req, res) => {
   if (!(await ensureAdminOnPremises(req, res))) return;
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ ok: false, reason: "invalid_token" });
-  const result = await checkInByToken(token, req.user.churchId);
+  const result = await checkInByToken(token, req.user.churchId, { id: req.user.id, name: req.user.name });
   res.json(result);
 });
 
@@ -123,6 +124,32 @@ router.post("/attendance/venue-checkin-child", venueLimiter, async (req, res) =>
   res.json(result);
 });
 
+// POST /api/attendance/venue-checkin-visitor  { slug, name, phone, lat, lng }
+// For someone who scans the posted QR code but isn't a registered member yet
+// (venue-verify above would have returned not_found for their phone number).
+// No venueToken/session here — there's no existing identity to scope one to,
+// just the same on-site geofence check as everyone else, then a free-text
+// name (required) and phone (optional). Recorded as a visitor attendance row
+// so an usher can follow up and, if the person is interested, add them to
+// the member list themselves. Same rate limiter as the other venue routes.
+router.post("/attendance/venue-checkin-visitor", venueLimiter, async (req, res) => {
+  const slug = String(req.body?.slug || "")
+    .trim()
+    .toLowerCase();
+  const name = String(req.body?.name || "").trim();
+  const phone = req.body?.phone ? String(req.body.phone).trim() : "";
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+
+  if (!slug || !name) return res.status(400).json({ ok: false, reason: "invalid_request" });
+
+  const church = await Church.findOne({ slug, active: true }).catch(() => null);
+  if (!church) return res.json({ ok: false, reason: "unknown_church" });
+
+  const result = await checkInVisitorAtVenue(church.id, name, phone, lat, lng);
+  res.json(result);
+});
+
 // --- Everything below requires an usher/admin session --------------------
 // Only an authenticated admin/usher can check in someone other than
 // themselves — the manual/scan paths below have no restriction on whose
@@ -146,7 +173,7 @@ router.post("/attendance/scan", async (req, res) => {
   const raw = String(req.body?.token || "").trim();
   if (!raw) return res.status(400).json({ ok: false, reason: "invalid_token" });
   const token = raw.includes("/c/") ? raw.split("/c/").pop().split(/[?#]/)[0] : raw;
-  const result = await checkInByToken(token, req.user.churchId);
+  const result = await checkInByToken(token, req.user.churchId, { id: req.user.id, name: req.user.name });
   res.json(result);
 });
 
@@ -157,7 +184,11 @@ router.post("/attendance/manual", async (req, res) => {
   if ((!memberId && !childId) || !serviceId) {
     return res.status(400).json({ ok: false, reason: "invalid_token" });
   }
-  const result = await checkInPersonManually({ memberId, childId, serviceId }, req.user.churchId);
+  const result = await checkInPersonManually(
+    { memberId, childId, serviceId },
+    req.user.churchId,
+    { id: req.user.id, name: req.user.name }
+  );
   res.json(result);
 });
 
@@ -179,7 +210,7 @@ router.post("/attendance/visitor", async (req, res) => {
     });
   }
   try {
-    await checkInVisitor(serviceId, name, phone || "", req.user.churchId);
+    await checkInVisitor(serviceId, name, phone || "", req.user.churchId, { id: req.user.id, name: req.user.name });
   } catch (err) {
     if (err.status === 404) return res.status(404).json({ error: "Service not found." });
     throw err;
@@ -263,6 +294,11 @@ function rowToRecord(a) {
     isChild: !!child,
     method: a.method,
     checkedInAt: a.checkedInAt,
+    // Who actually performed this check-in on the person's behalf (kiosk
+    // scan, manual search, adding a walk-in visitor) — null for every
+    // self-service path (venue self/child/visitor check-in). See the
+    // Attendance model for why this is denormalized rather than populated.
+    checkedInByName: a.checkedInByName ?? null,
   };
 }
 
@@ -284,10 +320,15 @@ async function findOwnService(id, churchId) {
 // member to say thanks for coming — the counts-only version from the
 // previous round didn't support that.
 async function buildRoster(rows, churchId) {
-  const checkedInAtByMemberId = new Map();
+  const checkInInfoByMemberId = new Map();
   for (const a of rows) {
     const member = a.memberId && typeof a.memberId === "object" ? a.memberId : null;
-    if (member) checkedInAtByMemberId.set(String(member._id), a.checkedInAt);
+    if (member) {
+      checkInInfoByMemberId.set(String(member._id), {
+        checkedInAt: a.checkedInAt,
+        checkedInByName: a.checkedInByName ?? null,
+      });
+    }
   }
 
   // Every active member on the church's roster, name-sorted so both lists
@@ -299,9 +340,9 @@ async function buildRoster(rows, churchId) {
   const presentMembers = [];
   const absentMembers = [];
   for (const m of allActiveMembers) {
-    const checkedInAt = checkedInAtByMemberId.get(String(m._id));
+    const info = checkInInfoByMemberId.get(String(m._id));
     const entry = { id: m.id, name: m.name, phone: m.phone ?? null };
-    if (checkedInAt) presentMembers.push({ ...entry, checkedInAt });
+    if (info) presentMembers.push({ ...entry, checkedInAt: info.checkedInAt, checkedInByName: info.checkedInByName });
     else absentMembers.push(entry);
   }
 
@@ -354,11 +395,18 @@ router.get("/services/:id/attendance/csv", async (req, res) => {
   const roster = await buildRoster(rows, req.user.churchId);
 
   const summary = `Present,${roster.present}\nAbsent,${roster.absent}\nActive members,${roster.totalActiveMembers}\n\n`;
-  const header = "Name,Phone,Child,Method,Checked In At\n";
+  const header = "Name,Phone,Child,Method,Checked In At,Checked In By\n";
   const body = rows
     .map((a) => {
       const r = rowToRecord(a);
-      return [r.name, r.phone ?? "", r.isChild ? "yes" : "no", r.method, new Date(r.checkedInAt).toISOString()]
+      return [
+        r.name,
+        r.phone ?? "",
+        r.isChild ? "yes" : "no",
+        r.method,
+        new Date(r.checkedInAt).toISOString(),
+        r.checkedInByName ?? "",
+      ]
         .map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`)
         .join(",");
     })
@@ -380,8 +428,13 @@ router.get("/dashboard", async (req, res) => {
   const memberCount = await Member.countDocuments({ active: true, churchId });
   const recentServices = await Service.find({ churchId }).sort({ createdAt: -1 }).limit(6);
 
+  // NOTE: unlike .find()/.countDocuments() above, .aggregate()'s $match does
+  // NOT auto-cast a plain string against the schema's ObjectId type — req.user.churchId
+  // is always a string (it comes straight off the JWT), so without this
+  // explicit cast the $match below silently matches zero documents and every
+  // service in the list shows "0 present" even when check-ins exist.
   const counts = await Attendance.aggregate([
-    { $match: { churchId } },
+    { $match: { churchId: new mongoose.Types.ObjectId(churchId) } },
     { $group: { _id: "$serviceId", count: { $sum: 1 } } },
   ]);
   const countMap = new Map(counts.map((c) => [String(c._id), c.count]));

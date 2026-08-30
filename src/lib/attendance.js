@@ -103,14 +103,21 @@ async function recordCheckIn(service, name, method, who, extra = {}) {
 // /c/[token] page (no login, just the personal QR itself) omits it — the
 // token IS the credential there, and the church is derived FROM whichever
 // record it resolves to, not asserted up front.
-async function checkInByToken(qrToken, expectedChurchId) {
+// `checkedInBy`, when given (`{ id, name }` of the signed-in admin/usher),
+// is recorded on the attendance row — see the Attendance model comment.
+// Omitted entirely by every self-service path.
+function checkedInByExtra(checkedInBy) {
+  return checkedInBy ? { checkedInByUserId: checkedInBy.id, checkedInByName: checkedInBy.name } : {};
+}
+
+async function checkInByToken(qrToken, expectedChurchId, checkedInBy) {
   const memberFilter = expectedChurchId ? { qrToken, churchId: expectedChurchId } : { qrToken };
   const member = await Member.findOne(memberFilter);
   if (member) {
     if (!member.active) return { ok: false, reason: "inactive_member" };
     const service = await getActiveService(member.churchId);
     if (!service) return { ok: false, reason: "no_active_service" };
-    return recordCheckIn(service, member.name, "qr", { memberId: member.id });
+    return recordCheckIn(service, member.name, "qr", { memberId: member.id }, checkedInByExtra(checkedInBy));
   }
 
   const childFilter = expectedChurchId ? { qrToken, churchId: expectedChurchId } : { qrToken };
@@ -119,7 +126,7 @@ async function checkInByToken(qrToken, expectedChurchId) {
     if (!child.active) return { ok: false, reason: "inactive_member" };
     const service = await getActiveService(child.churchId);
     if (!service) return { ok: false, reason: "no_active_service" };
-    return recordCheckIn(service, child.name, "qr", { childId: child.id });
+    return recordCheckIn(service, child.name, "qr", { childId: child.id }, checkedInByExtra(checkedInBy));
   }
 
   return { ok: false, reason: "invalid_token" };
@@ -134,22 +141,22 @@ async function checkInByToken(qrToken, expectedChurchId) {
 // required and re-verified against the service/member/child here — never
 // trust that the memberId/childId/serviceId the client sent actually
 // belongs to the caller's church.
-async function checkInPersonManually({ memberId, childId, serviceId }, churchId) {
+async function checkInPersonManually({ memberId, childId, serviceId }, churchId, checkedInBy) {
   const service = await Service.findById(serviceId).catch(() => null);
   if (!service || String(service.churchId) !== String(churchId)) return { ok: false, reason: "no_active_service" };
 
   if (memberId) {
     const member = await Member.findById(memberId).catch(() => null);
     if (!member || String(member.churchId) !== String(churchId)) return { ok: false, reason: "invalid_token" };
-    return recordCheckIn(service, member.name, "manual", { memberId: member.id });
+    return recordCheckIn(service, member.name, "manual", { memberId: member.id }, checkedInByExtra(checkedInBy));
   }
 
   const child = await Child.findById(childId).catch(() => null);
   if (!child || String(child.churchId) !== String(churchId)) return { ok: false, reason: "invalid_token" };
-  return recordCheckIn(service, child.name, "manual", { childId: child.id });
+  return recordCheckIn(service, child.name, "manual", { childId: child.id }, checkedInByExtra(checkedInBy));
 }
 
-async function checkInVisitor(serviceId, visitorName, visitorPhone, churchId) {
+async function checkInVisitor(serviceId, visitorName, visitorPhone, churchId, checkedInBy) {
   const service = await Service.findById(serviceId).catch(() => null);
   if (!service || String(service.churchId) !== String(churchId)) {
     throw Object.assign(new Error("Service not found."), { status: 404 });
@@ -160,7 +167,51 @@ async function checkInVisitor(serviceId, visitorName, visitorPhone, churchId) {
     visitorName,
     visitorPhone: visitorPhone || null,
     method: "visitor",
+    ...checkedInByExtra(checkedInBy),
   });
+}
+
+// --- Venue self-check-in for a first-time visitor (not yet a member) -----
+//
+// A visitor scanning the posted QR code has no phone number on file to
+// verify against — that's the whole point, they're not registered yet.
+// Same on-site geofence requirement as the member flow (checked BEFORE
+// touching anything else, same as everywhere else in this file), but no
+// identity check beyond that: they simply state their name (required) and
+// phone (optional, so an usher can follow up if they're interested in
+// joining) themselves. `checkedInByUserId`/`checkedInByName` are correctly
+// left unset here — this is a self-service path, not an usher acting on
+// someone's behalf.
+async function checkInVisitorAtVenue(churchId, name, phone, lat, lng) {
+  const church = await Church.findById(churchId).catch(() => null);
+  if (!church || !Number.isFinite(church.latitude) || !Number.isFinite(church.longitude)) {
+    return { ok: false, reason: "not_configured" };
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { ok: false, reason: "invalid_location" };
+  }
+  const radius = Number.isFinite(church.radiusMeters) && church.radiusMeters > 0 ? church.radiusMeters : 200;
+  if (distanceMeters(church.latitude, church.longitude, lat, lng) > radius) {
+    return { ok: false, reason: "out_of_range" };
+  }
+
+  const service = await getActiveService(church.id);
+  if (!service) return { ok: false, reason: "no_active_service" };
+
+  const trimmedName = String(name || "").trim();
+  if (!trimmedName) return { ok: false, reason: "invalid_request" };
+  const trimmedPhone = phone ? String(phone).trim() : null;
+
+  await Attendance.create({
+    serviceId: service.id,
+    churchId: church.id,
+    visitorName: trimmedName,
+    visitorPhone: trimmedPhone,
+    method: "visitor",
+    location: Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined,
+  });
+
+  return { ok: true, alreadyIn: false, memberName: trimmedName, serviceId: service.id, serviceName: service.name };
 }
 
 // --- Venue self-check-in (the posted QR code members scan on-site) -------
@@ -297,6 +348,7 @@ module.exports = {
   checkInByToken,
   checkInPersonManually,
   checkInVisitor,
+  checkInVisitorAtVenue,
   verifyVenueMember,
   checkInSelfAtVenue,
   checkInChildAtVenue,
