@@ -7,6 +7,7 @@ const Attendance = require("../models/Attendance");
 const Church = require("../models/Church");
 const { requireAuth } = require("../middleware/auth");
 const { newQrToken } = require("../lib/utils");
+const { phonesMatch } = require("../lib/attendance");
 
 const router = express.Router();
 
@@ -79,6 +80,49 @@ function readOptionalFields(body) {
   if (fields.numberOfChildren !== null && !Number.isFinite(fields.numberOfChildren)) {
     errors.push("Number of children must be a number.");
     fields.numberOfChildren = null;
+  }
+  return [fields, errors];
+}
+
+// Case-insensitive version of pickEnum for imported spreadsheet data — a
+// church's own CSV/Excel export is very unlikely to match our exact stored
+// casing ("Male" vs "male", "Youth" vs "youth"), so a bulk import is far
+// more useful matching loosely and normalizing to the canonical value than
+// rejecting a whole row over casing. Unrecognized non-empty values are
+// still reported as an error rather than silently dropped, same as the
+// single-add form.
+function pickEnumLoose(value, allowed, label, errors) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+  const match = allowed.find((a) => a.toLowerCase() === trimmed.toLowerCase());
+  if (!match) {
+    errors.push(`${label} "${trimmed}" is not one of: ${allowed.join(", ")}.`);
+    return null;
+  }
+  return match;
+}
+
+// Same shape as readOptionalFields, but tolerant of the raw, inconsistently
+// formatted values a real church's spreadsheet will actually contain —
+// used only by the bulk import route below. Returns [fields, errors] per
+// row, same contract as readOptionalFields.
+function readImportRowFields(row) {
+  const errors = [];
+  const fields = {
+    gender: pickEnumLoose(row?.gender, GENDERS, "Gender", errors),
+    maritalStatus: pickEnumLoose(row?.maritalStatus, MARITAL_STATUSES, "Marital status", errors),
+    jobStatus: pickEnumLoose(row?.jobStatus, JOB_STATUSES, "Job status", errors),
+    department: pickEnumLoose(row?.department, DEPARTMENTS, "Department", errors),
+    emergencyContactName: String(row?.emergencyContactName ?? "").trim() || null,
+    emergencyContactPhone: String(row?.emergencyContactPhone ?? "").trim() || null,
+    address: String(row?.address ?? "").trim() || null,
+    numberOfChildren: null,
+  };
+  const rawChildren = row?.numberOfChildren;
+  if (rawChildren !== undefined && rawChildren !== null && String(rawChildren).trim() !== "") {
+    const n = Number(rawChildren);
+    if (Number.isFinite(n)) fields.numberOfChildren = n;
+    else errors.push(`Number of children "${rawChildren}" is not a number.`);
   }
   return [fields, errors];
 }
@@ -170,6 +214,110 @@ router.post("/", async (req, res) => {
   });
 
   res.status(201).json({ member: serialize(member) });
+});
+
+// POST /api/members/import  { members: [{ name, phone, email, gender,
+// maritalStatus, jobStatus, department, emergencyContactName,
+// emergencyContactPhone, address, numberOfChildren }, ...] }
+//
+// Bulk-import a church's existing member roster from a CSV/Excel file the
+// frontend has already parsed into this shape (column-header mapping and
+// file parsing both happen client-side — this route only ever sees plain
+// JSON with our own field names, same trust boundary as every other write
+// route here). The frontend chunks a large file into several requests of
+// this shape rather than sending everything at once, which is also why
+// this stays a plain loop rather than needing its own rate limiter: each
+// request is already authenticated and bounded by MAX_IMPORT_ROWS below.
+//
+// Design choices, spelled out because they're easy to get wrong on a
+// re-read:
+//   - A row with no name is skipped (reported as an error), never silently
+//     dropped — a church reviewing the summary should be able to tell
+//     exactly which rows in their file didn't come through and why.
+//   - A row whose phone number tolerant-matches (phonesMatch, same
+//     last-8-digit comparison used everywhere else in this app) an
+//     EXISTING active member of this church, or an earlier row already
+//     processed in this same import (across every batch, not just the
+//     current one — see existingPhones below), is skipped as a duplicate
+//     rather than creating a second record for the same person. A row
+//     with no phone number at all is never auto-deduped this way (there's
+//     nothing reliable to match on), so re-uploading the same file with
+//     phoneless rows will create repeats — worth a clear warning in the UI.
+//   - Optional-field values are matched case-insensitively against the
+//     same enums the single-add form uses (see pickEnumLoose above) — a
+//     real spreadsheet's casing is never going to reliably match our
+//     stored casing, and rejecting the whole import over "male" vs "Male"
+//     would make this feature far less useful than it should be.
+const MAX_IMPORT_ROWS = 500;
+
+router.post("/import", async (req, res) => {
+  const rows = Array.isArray(req.body?.members) ? req.body.members : null;
+  if (!rows) return res.status(400).json({ error: "Expected a members array." });
+  if (rows.length === 0) return res.json({ createdCount: 0, skippedCount: 0, errorCount: 0, errors: [], created: [] });
+  if (rows.length > MAX_IMPORT_ROWS) {
+    return res.status(400).json({ error: `Send at most ${MAX_IMPORT_ROWS} rows per request.` });
+  }
+
+  // Loaded once, not per-row — this church's active members with a phone
+  // number on file, used for the tolerant duplicate check below.
+  const existingMembers = await Member.find({ churchId: req.user.churchId, active: true, phone: { $ne: null } })
+    .select("phone")
+    .lean();
+  const existingPhones = existingMembers.map((m) => m.phone).filter(Boolean);
+  // Phones from rows already accepted earlier in THIS request, so two
+  // duplicate rows in the same uploaded file don't both get created.
+  const acceptedPhonesThisRequest = [];
+
+  const errors = [];
+  const toInsert = [];
+  let skippedCount = 0;
+
+  rows.forEach((row, index) => {
+    const name = String(row?.name ?? "").trim();
+    if (!name) {
+      errors.push({ row: index, name: null, reason: "Missing name." });
+      return;
+    }
+
+    const phone = String(row?.phone ?? "").trim() || null;
+    const email = String(row?.email ?? "").trim() || null;
+
+    if (phone) {
+      const isDuplicate =
+        existingPhones.some((p) => phonesMatch(phone, p)) ||
+        acceptedPhonesThisRequest.some((p) => phonesMatch(phone, p));
+      if (isDuplicate) {
+        skippedCount++;
+        return;
+      }
+    }
+
+    const [optional, fieldErrors] = readImportRowFields(row);
+    if (fieldErrors.length) {
+      errors.push({ row: index, name, reason: fieldErrors.join(" ") });
+      return;
+    }
+
+    if (phone) acceptedPhonesThisRequest.push(phone);
+    toInsert.push({
+      name,
+      phone,
+      email,
+      qrToken: newQrToken(),
+      churchId: req.user.churchId,
+      ...optional,
+    });
+  });
+
+  const created = toInsert.length ? await Member.insertMany(toInsert) : [];
+
+  res.json({
+    createdCount: created.length,
+    skippedCount,
+    errorCount: errors.length,
+    errors,
+    created: created.map(serialize),
+  });
 });
 
 router.patch("/:id", async (req, res) => {

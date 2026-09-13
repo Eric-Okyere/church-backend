@@ -354,4 +354,8 @@ module.exports = {
   checkInChildAtVenue,
   getActiveService,
   verifyAdminAtChurch,
+  // Exported for reuse by the members-import route, which dedupes an
+  // uploaded CSV/Excel roster against existing members by the same
+  // tolerant last-8-digit phone comparison used everywhere else.
+  phonesMatch,
 };

@@ -30,7 +30,11 @@ app.use(
     },
   })
 );
-app.use(express.json());
+// Default (100kb) is too small for a bulk member-import batch (a few
+// hundred rows of profile fields easily exceeds it) — 2mb comfortably fits
+// the largest batch the frontend sends per request while still bounding
+// how much any single request can make the server parse.
+app.use(express.json({ limit: "2mb" }));
 
 // `features` is a small, deliberately manual checklist — not auto-derived
 // from anything — of behavior changes that are otherwise invisible from
