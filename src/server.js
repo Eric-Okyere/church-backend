@@ -15,6 +15,7 @@ const platformRoutes = require("./routes/platform");
 const titheRoutes = require("./routes/tithes");
 const assetRoutes = require("./routes/assets");
 const levyRoutes = require("./routes/levies");
+const visitorRoutes = require("./routes/visitors");
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.get("/health", (req, res) =>
       "member-tithes",
       "church-asset-inventory",
       "named-levies-with-progress",
+      "visitor-directory-and-conversion",
     ],
   })
 );
@@ -88,6 +90,7 @@ app.use("/api/platform", platformRoutes);
 app.use("/api/tithes", titheRoutes);
 app.use("/api/assets", assetRoutes);
 app.use("/api/levies", levyRoutes);
+app.use("/api/visitors", visitorRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
