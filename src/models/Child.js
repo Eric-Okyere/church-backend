@@ -10,6 +10,13 @@ const mongoose = require("mongoose");
 const childSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   parentMemberId: { type: mongoose.Schema.Types.ObjectId, ref: "Member", required: true },
+  // Denormalized from the parent Member at creation time — lets a child's
+  // own record carry an identifiable contact (search results, future
+  // exports) without joining back to Member on every read. A snapshot of
+  // who added this child, not a live mirror: it is not kept in sync if the
+  // parent's own name/phone changes later.
+  parentName: { type: String, trim: true, default: null },
+  parentPhone: { type: String, trim: true, default: null },
   qrToken: { type: String, required: true, unique: true },
   active: { type: Boolean, default: true },
   // Denormalized from the parent Member at creation time — lets every

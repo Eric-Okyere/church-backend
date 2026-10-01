@@ -148,7 +148,15 @@ function serialize(m) {
 }
 
 function serializeChild(c) {
-  return { id: c.id, name: c.name, active: c.active, createdAt: c.createdAt };
+  return {
+    id: c.id,
+    name: c.name,
+    parentMemberId: c.parentMemberId,
+    parentName: c.parentName,
+    parentPhone: c.parentPhone,
+    active: c.active,
+    createdAt: c.createdAt,
+  };
 }
 
 // Fetches a member by id, but ONLY if it belongs to the caller's church —
@@ -419,6 +427,9 @@ router.post("/:memberId/children", async (req, res) => {
   const child = await Child.create({
     name,
     parentMemberId: parent.id,
+    // Snapshotted onto the child at creation time — see Child.js for why.
+    parentName: parent.name,
+    parentPhone: parent.phone,
     qrToken: newQrToken(),
     churchId: req.user.churchId,
   });

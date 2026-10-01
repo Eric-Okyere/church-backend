@@ -8,7 +8,15 @@ const router = express.Router();
 router.use(requireAuth);
 
 function serialize(c) {
-  return { id: c.id, name: c.name, parentMemberId: c.parentMemberId, active: c.active, createdAt: c.createdAt };
+  return {
+    id: c.id,
+    name: c.name,
+    parentMemberId: c.parentMemberId,
+    parentName: c.parentName,
+    parentPhone: c.parentPhone,
+    active: c.active,
+    createdAt: c.createdAt,
+  };
 }
 
 // Fetches a child by id, but ONLY if it belongs to the caller's church —
@@ -37,8 +45,12 @@ router.get("/search", async (req, res) => {
     children: children.map((c) => ({
       id: c.id,
       name: c.name,
+      // Prefer the name snapshotted on the child at creation time; fall
+      // back to the populated parent for children created before that
+      // field existed.
       parentName:
-        c.parentMemberId && typeof c.parentMemberId === "object" ? c.parentMemberId.name : null,
+        c.parentName ||
+        (c.parentMemberId && typeof c.parentMemberId === "object" ? c.parentMemberId.name : null),
     })),
   });
 });
