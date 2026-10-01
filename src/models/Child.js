@@ -17,6 +17,15 @@ const childSchema = new mongoose.Schema({
   // parent's own name/phone changes later.
   parentName: { type: String, trim: true, default: null },
   parentPhone: { type: String, trim: true, default: null },
+  // Same enums the Member model uses — a child can belong to a
+  // department (e.g. the Children's ministry) and has a gender, exactly
+  // like any other profile field; both optional.
+  gender: { type: String, enum: ["Male", "Female"], default: null },
+  department: {
+    type: String,
+    enum: ["Youth", "Children", "Men", "Leader", "Women"],
+    default: null,
+  },
   qrToken: { type: String, required: true, unique: true },
   active: { type: Boolean, default: true },
   // Denormalized from the parent Member at creation time — lets every

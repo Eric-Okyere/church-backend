@@ -7,6 +7,19 @@ const { requireAuth } = require("../middleware/auth");
 const router = express.Router();
 router.use(requireAuth);
 
+// Same enums/validator members.js uses for a Member's own gender/department.
+const GENDERS = ["Male", "Female"];
+const DEPARTMENTS = ["Youth", "Children", "Men", "Leader", "Women"];
+
+function pickEnum(value, allowed, label, errors) {
+  if (value === undefined || value === null || value === "") return null;
+  if (!allowed.includes(value)) {
+    errors.push(`${label} must be one of: ${allowed.join(", ")}.`);
+    return null;
+  }
+  return value;
+}
+
 function serialize(c) {
   return {
     id: c.id,
@@ -14,6 +27,8 @@ function serialize(c) {
     parentMemberId: c.parentMemberId,
     parentName: c.parentName,
     parentPhone: c.parentPhone,
+    gender: c.gender,
+    department: c.department,
     active: c.active,
     createdAt: c.createdAt,
   };
@@ -50,6 +65,8 @@ router.get("/", async (req, res) => {
         parentMemberId: parent ? parent.id : c.parentMemberId,
         parentName: c.parentName || parent?.name || null,
         parentPhone: c.parentPhone || parent?.phone || null,
+        gender: c.gender,
+        department: c.department,
         active: c.active,
         createdAt: c.createdAt,
       };
@@ -91,7 +108,17 @@ router.patch("/:id", async (req, res) => {
   const owned = await findOwnChild(req.params.id, req.user.churchId);
   if (!owned) return res.status(404).json({ error: "Child not found." });
 
-  const child = await Child.findByIdAndUpdate(req.params.id, { name }, { new: true });
+  // gender/department only change if the caller actually sent them — an
+  // omitted field leaves the existing value alone rather than clearing it,
+  // unlike an explicit empty string, which does clear it (same convention
+  // readOptionalFields uses for a Member in members.js).
+  const errors = [];
+  const update = { name };
+  if (req.body?.gender !== undefined) update.gender = pickEnum(req.body.gender, GENDERS, "Gender", errors);
+  if (req.body?.department !== undefined) update.department = pickEnum(req.body.department, DEPARTMENTS, "Department", errors);
+  if (errors.length) return res.status(400).json({ error: errors.join(" ") });
+
+  const child = await Child.findByIdAndUpdate(req.params.id, update, { new: true });
   res.json({ child: serialize(child) });
 });
 

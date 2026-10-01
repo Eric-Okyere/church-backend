@@ -154,6 +154,8 @@ function serializeChild(c) {
     parentMemberId: c.parentMemberId,
     parentName: c.parentName,
     parentPhone: c.parentPhone,
+    gender: c.gender,
+    department: c.department,
     active: c.active,
     createdAt: c.createdAt,
   };
@@ -416,7 +418,7 @@ router.get("/:memberId/children", async (req, res) => {
   res.json({ children: children.map(serializeChild) });
 });
 
-// POST /api/members/:memberId/children  { name }
+// POST /api/members/:memberId/children  { name, gender, department }
 router.post("/:memberId/children", async (req, res) => {
   const parent = await findOwnMember(req.params.memberId, req.user.churchId);
   if (!parent) return res.status(404).json({ error: "Member not found." });
@@ -424,12 +426,20 @@ router.post("/:memberId/children", async (req, res) => {
   const name = String(req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "Child's name is required." });
 
+  // Same enums/validator the member form already uses above.
+  const errors = [];
+  const gender = pickEnum(req.body?.gender, GENDERS, "Gender", errors);
+  const department = pickEnum(req.body?.department, DEPARTMENTS, "Department", errors);
+  if (errors.length) return res.status(400).json({ error: errors.join(" ") });
+
   const child = await Child.create({
     name,
     parentMemberId: parent.id,
     // Snapshotted onto the child at creation time — see Child.js for why.
     parentName: parent.name,
     parentPhone: parent.phone,
+    gender,
+    department,
     qrToken: newQrToken(),
     churchId: req.user.churchId,
   });
