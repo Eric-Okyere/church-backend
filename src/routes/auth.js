@@ -30,10 +30,17 @@ router.post("/login", async (req, res) => {
     username: user.username,
     role: user.role,
     churchId: user.churchId,
+    isPlatformAdmin: user.isPlatformAdmin,
   });
   res.json({
     token,
-    user: { id: user.id, name: user.name, username: user.username, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      role: user.role,
+      isPlatformAdmin: !!user.isPlatformAdmin,
+    },
   });
 });
 
@@ -45,7 +52,8 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/me", requireAuth, async (req, res) => {
-  const church = await Church.findById(req.user.churchId).catch(() => null);
+  // A platform admin has no churchId, so there's no church to look up.
+  const church = req.user.churchId ? await Church.findById(req.user.churchId).catch(() => null) : null;
   res.json({
     user: { ...req.user, churchName: church ? church.name : null },
   });

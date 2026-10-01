@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "seed:platform-admin": "node scripts/seedPlatformAdmin.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

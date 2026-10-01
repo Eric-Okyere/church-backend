@@ -9,7 +9,16 @@ function requireEnvSecret() {
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user.id, name: user.name, username: user.username, role: user.role, churchId: user.churchId },
+    {
+      sub: user.id,
+      name: user.name,
+      username: user.username,
+      role: user.role,
+      churchId: user.churchId,
+      // False/absent for every ordinary church user; true only for a
+      // platform-admin account created via `npm run seed:platform-admin`.
+      isPlatformAdmin: !!user.isPlatformAdmin,
+    },
     requireEnvSecret(),
     { expiresIn: "30d" }
   );
@@ -36,7 +45,8 @@ function verifyVenueToken(token) {
   return payload.sub;
 }
 
-// Verifies the Bearer token and attaches { id, name, username, role } to req.user.
+// Verifies the Bearer token and attaches { id, name, username, role,
+// churchId, isPlatformAdmin } to req.user.
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -45,11 +55,13 @@ function requireAuth(req, res, next) {
   }
   try {
     const payload = jwt.verify(token, requireEnvSecret());
-    if (!payload.churchId) {
-      // A token minted before multi-tenancy (or otherwise missing its
-      // church) can't be scoped to anything — treat it as invalid rather
-      // than letting it fall through with an undefined churchId, which
-      // would silently match no rows (fail-closed, not fail-open).
+    // A token minted before multi-tenancy (or otherwise missing its church)
+    // can't be scoped to anything — treat it as invalid rather than letting
+    // it fall through with an undefined churchId, which would silently
+    // match no rows (fail-closed, not fail-open). A platform-admin token is
+    // the one deliberate exception: it has no churchId by design, so it's
+    // accepted on isPlatformAdmin alone.
+    if (!payload.churchId && !payload.isPlatformAdmin) {
       return res.status(401).json({ error: "Your session has expired — please sign in again." });
     }
     req.user = {
@@ -57,7 +69,8 @@ function requireAuth(req, res, next) {
       name: payload.name,
       username: payload.username,
       role: payload.role,
-      churchId: payload.churchId,
+      churchId: payload.churchId || null,
+      isPlatformAdmin: !!payload.isPlatformAdmin,
     };
     next();
   } catch {
@@ -72,4 +85,21 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { signToken, requireAuth, requireAdmin, signVenueToken, verifyVenueToken };
+// Gates the cross-church /api/platform/* routes. Deliberately separate from
+// requireAdmin above — a platform admin is not a church's role:"admin",
+// and an ordinary church admin must never pass this check.
+function requirePlatformAdmin(req, res, next) {
+  if (!req.user?.isPlatformAdmin) {
+    return res.status(403).json({ error: "Platform admins only." });
+  }
+  next();
+}
+
+module.exports = {
+  signToken,
+  requireAuth,
+  requireAdmin,
+  requirePlatformAdmin,
+  signVenueToken,
+  verifyVenueToken,
+};

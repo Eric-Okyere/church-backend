@@ -9,7 +9,22 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ["admin", "usher"], default: "usher" },
-  churchId: { type: mongoose.Schema.Types.ObjectId, ref: "Church", required: true },
+  // Required for an ordinary church user, but optional for a platform admin
+  // (isPlatformAdmin: true) — a platform admin isn't scoped to any one
+  // church, so it has no churchId at all.
+  churchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Church",
+    required: function requiresChurch() {
+      return !this.isPlatformAdmin;
+    },
+    default: null,
+  },
+  // A separate privilege tier from the per-church role above — set only by
+  // the `npm run seed:platform-admin` script, never through church signup.
+  // Grants access to the cross-church /api/platform/* routes and nothing
+  // else; it does NOT imply role: "admin" within any particular church.
+  isPlatformAdmin: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

@@ -23,6 +23,15 @@ const churchSchema = new mongoose.Schema({
   longitude: { type: Number, default: null },
   radiusMeters: { type: Number, default: 200 },
 
+  // Manually set by the platform admin from /platform — GraceTrack has no
+  // payment-gateway integration yet, so this is not driven by any billing
+  // webhook. paymentNote is an optional free-text note ("Paid via MTN
+  // MoMo, covers Oct–Dec 2026"); paymentUpdatedAt stamps whenever either
+  // field changes.
+  paymentStatus: { type: String, enum: ["paid", "unpaid"], default: "unpaid" },
+  paymentNote: { type: String, default: null, trim: true },
+  paymentUpdatedAt: { type: Date, default: null },
+
   active: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
 });

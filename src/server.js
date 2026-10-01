@@ -11,6 +11,7 @@ const serviceRoutes = require("./routes/services");
 const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
 const analyticsRoutes = require("./routes/analytics");
+const platformRoutes = require("./routes/platform");
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.get("/health", (req, res) =>
       "admin-premises-checkin",
       "service-present-absent-roster",
       "service-roster-named-lists",
+      "platform-admin-dashboard",
     ],
   })
 );
@@ -70,6 +72,10 @@ app.use("/api", venueRoutes);
 // so its router.use(requireAuth) can never accidentally gate a route from
 // another router the way it would on a shared prefix like "/api".
 app.use("/api/analytics", analyticsRoutes);
+// Exclusive prefix, same reasoning as analyticsRoutes above — platformRoutes
+// owns "/api/platform" and nothing else, so its own router.use(requireAuth,
+// requirePlatformAdmin) can never accidentally gate an unrelated route.
+app.use("/api/platform", platformRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
