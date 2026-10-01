@@ -28,6 +28,35 @@ async function findOwnChild(id, churchId) {
   return child;
 }
 
+// GET /api/children?active=true|false
+// Every child registered at this church, across every parent — powers the
+// Members page surfacing children alongside members (clearly marked, not
+// merged into the member list server-side). Populates the parent as a
+// fallback for a child that pre-dates the parentName/parentPhone snapshot,
+// same pattern as /search below.
+router.get("/", async (req, res) => {
+  const filter = { churchId: req.user.churchId };
+  if (req.query.active === "true") filter.active = true;
+  if (req.query.active === "false") filter.active = false;
+
+  const children = await Child.find(filter).sort({ name: 1 }).populate("parentMemberId", "name phone");
+
+  res.json({
+    children: children.map((c) => {
+      const parent = c.parentMemberId && typeof c.parentMemberId === "object" ? c.parentMemberId : null;
+      return {
+        id: c.id,
+        name: c.name,
+        parentMemberId: parent ? parent.id : c.parentMemberId,
+        parentName: c.parentName || parent?.name || null,
+        parentPhone: c.parentPhone || parent?.phone || null,
+        active: c.active,
+        createdAt: c.createdAt,
+      };
+    }),
+  });
+});
+
 // GET /api/children/search?q=...
 // Admin-only — powers the "check someone in manually" search on the
 // dashboard/kiosk so an usher can find a child the same way they find a
