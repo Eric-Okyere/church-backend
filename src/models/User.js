@@ -25,6 +25,28 @@ const userSchema = new mongoose.Schema({
   // Grants access to the cross-church /api/platform/* routes and nothing
   // else; it does NOT imply role: "admin" within any particular church.
   isPlatformAdmin: { type: Boolean, default: false },
+  // Collected at signup going forward (required there) so password
+  // reset has somewhere to send a link. Optional here at the schema
+  // level only so accounts created before this existed don't fail
+  // validation on save — they add one later from /admin/settings.
+  // sparse so any number of accounts can have no email on file without
+  // colliding on the unique index.
+  email: { type: String, default: null, lowercase: true, trim: true, unique: true, sparse: true },
+  // True for every account except a brand-new signup still working through
+  // the 6-digit email-verification step (see routes/churches.js) — that
+  // account is created with this explicitly set to false and can't sign in
+  // until it verifies. Defaults to true so every account that predates
+  // this feature (including the platform admin, and any account that
+  // added its email later from Settings rather than at signup) is
+  // unaffected — the login gate below only ever blocks an account that
+  // was deliberately created unverified.
+  emailVerified: { type: Boolean, default: true },
+  // Set by POST /api/auth/forgot-password, cleared on successful reset
+  // or once it expires. The raw token is never stored — only its SHA-256
+  // hash, so a database read alone can't be used to reset someone's
+  // password.
+  resetTokenHash: { type: String, default: null },
+  resetTokenExpires: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 

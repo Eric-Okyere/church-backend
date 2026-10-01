@@ -57,6 +57,9 @@ app.get("/health", (req, res) =>
       "service-present-absent-roster",
       "service-roster-named-lists",
       "platform-admin-dashboard",
+      "password-reset",
+      "church-contact-phone",
+      "email-verification-before-signin",
     ],
   })
 );

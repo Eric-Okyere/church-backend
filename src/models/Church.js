@@ -13,6 +13,12 @@ const churchSchema = new mongoose.Schema({
   // secret — but must be unique so two churches never collide on one link.
   slug: { type: String, required: true, unique: true, trim: true, lowercase: true },
 
+  // The church's own contact number — so GraceTrack/Linkpii (or another
+  // church admin) can actually reach them, e.g. about payment or support.
+  // Optional and freeform (no format validation) for the same reason
+  // Member.phone is: international formats vary too much to be strict here.
+  phone: { type: String, default: null, trim: true },
+
   // The church's own coordinates + how far (in meters) a member's phone is
   // allowed to be from them for venue self-check-in to succeed. Replaces
   // the old single-tenant CHURCH_LATITUDE/CHURCH_LONGITUDE/

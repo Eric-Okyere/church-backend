@@ -22,6 +22,7 @@ async function serializeChurch(church) {
     id: church.id,
     name: church.name,
     slug: church.slug,
+    phone: church.phone,
     active: church.active,
     createdAt: church.createdAt,
     memberCount,
