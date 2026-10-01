@@ -13,7 +13,7 @@ const churchSchema = new mongoose.Schema({
   // secret — but must be unique so two churches never collide on one link.
   slug: { type: String, required: true, unique: true, trim: true, lowercase: true },
 
-  // The church's own contact number — so GraceTrack/Linkpii (or another
+  // The church's own contact number — so Linkpii Church Management (or another
   // church admin) can actually reach them, e.g. about payment or support.
   // Optional and freeform (no format validation) for the same reason
   // Member.phone is: international formats vary too much to be strict here.
@@ -29,7 +29,7 @@ const churchSchema = new mongoose.Schema({
   longitude: { type: Number, default: null },
   radiusMeters: { type: Number, default: 200 },
 
-  // Manually set by the platform admin from /platform — GraceTrack has no
+  // Manually set by the platform admin from /platform — Linkpii Church Management has no
   // payment-gateway integration yet, so this is not driven by any billing
   // webhook. paymentNote is an optional free-text note ("Paid via MTN
   // MoMo, covers Oct–Dec 2026"); paymentUpdatedAt stamps whenever either

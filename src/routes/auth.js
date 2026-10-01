@@ -107,7 +107,7 @@ function appUrl() {
 
 // POST /api/auth/forgot-password { email }
 // Always responds with the same generic message whether or not the email
-// is on file — this avoids leaking which emails have GraceTrack accounts.
+// is on file — this avoids leaking which emails have Linkpii Church Management accounts.
 router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   if (!email) return res.status(400).json({ error: "Enter your email address." });

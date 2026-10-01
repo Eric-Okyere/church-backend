@@ -1,6 +1,6 @@
-# GraceTrack API — church-backend
+# Linkpii Church Management API — church-backend
 
-The backend for GraceTrack: a REST API (Node.js + Express + MongoDB) for
+The backend for Linkpii Church Management: a REST API (Node.js + Express + MongoDB) for
 church attendance — members, services, QR/manual check-in, live counts, CSV
 export. Pairs with a separate frontend (see the `church-frontend` project)
 that talks to this API over HTTP. Deploys to [Render](https://render.com).

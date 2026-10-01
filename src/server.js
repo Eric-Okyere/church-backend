@@ -97,5 +97,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 4000;
 
 connectDB().then(() => {
-  app.listen(PORT, () => console.log(`GraceTrack API listening on :${PORT}`));
+  app.listen(PORT, () => console.log(`Linkpii Church Management API listening on :${PORT}`));
 });

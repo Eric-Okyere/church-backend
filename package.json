@@ -2,7 +2,7 @@
   "name": "church-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "GraceTrack church attendance API (Express + MongoDB)",
+  "description": "Linkpii Church Management API (Express + MongoDB)",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
