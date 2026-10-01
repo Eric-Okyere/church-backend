@@ -57,7 +57,7 @@ app.get("/health", (req, res) =>
       "service-analytics",
       "service-demographics",
       "admin-only-qr-checkin",
-      "admin-premises-checkin",
+      "admin-checkin-no-gps-required",
       "service-present-absent-roster",
       "service-roster-named-lists",
       "platform-admin-dashboard",

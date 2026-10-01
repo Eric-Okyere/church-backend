@@ -14,33 +14,13 @@ const {
   verifyVenueMember,
   checkInSelfAtVenue,
   checkInChildAtVenue,
-  verifyAdminAtChurch,
 } = require("../lib/attendance");
 
 const router = express.Router();
 
-// --- Admin/usher on-premises guard ---------------------------------------
-// Shared by every admin/usher action below that records someone's
-// attendance — requires the signed-in admin/usher's OWN device GPS
-// (`lat`/`lng` in the request body) to be within their church's configured
-// premises radius, the same coordinates a church already sets on its
-// Settings page for venue self-check-in. See `verifyAdminAtChurch` in
-// `lib/attendance.js` for exactly what "configured" vs. "unenforced" means.
-// Writes the response and returns false on failure; callers just `return`.
-async function ensureAdminOnPremises(req, res) {
-  const lat = Number(req.body?.lat);
-  const lng = Number(req.body?.lng);
-  const check = await verifyAdminAtChurch(req.user.churchId, lat, lng);
-  if (!check.ok) {
-    res.status(403).json({ ok: false, reason: check.reason });
-    return false;
-  }
-  return true;
-}
-
 // --- Admin/usher only: the page a member's (or child's) personal QR code
 // opens ---------------------------------------------------------------
-// POST /api/attendance/checkin  { token, lat, lng }
+// POST /api/attendance/checkin  { token }
 // A member's/child's printed or displayed QR code encodes a plain link to
 // this page — which means anyone's phone camera app (not just the in-app
 // kiosk scanner) can open it. requireAuth here is what stops that: only a
@@ -49,10 +29,14 @@ async function ensureAdminOnPremises(req, res) {
 // rather than silently checking the person in. Scoped to the caller's own
 // church, same as the in-app kiosk scanner (`/attendance/scan` below) —
 // an admin can never check in another church's member this way either.
-// `ensureAdminOnPremises` additionally requires that signed-in admin's own
-// device to actually be at the church (once the church has GPS configured).
+// NOTE: this no longer also requires the signed-in admin/usher's own device
+// GPS to be at the church — an earlier round added that on-premises check
+// for every admin/usher check-in action, but it was removed at the user's
+// request: GPS is only meaningful for proving a MEMBER is physically
+// on-site (the venue self-check-in flow below still does exactly that),
+// not for gating staff, who are already authenticated and may legitimately
+// need to check someone in from the office, home, or anywhere else.
 router.post("/attendance/checkin", requireAuth, async (req, res) => {
-  if (!(await ensureAdminOnPremises(req, res))) return;
   const token = String(req.body?.token || "").trim();
   if (!token) return res.status(400).json({ ok: false, reason: "invalid_token" });
   const result = await checkInByToken(token, req.user.churchId, { id: req.user.id, name: req.user.name });
@@ -160,16 +144,14 @@ router.post("/attendance/venue-checkin-visitor", venueLimiter, async (req, res) 
 // church's members, children, and services.
 router.use(requireAuth);
 
-// POST /api/attendance/scan  { token, lat, lng }  — used by the kiosk
-// camera scanner. Accepts either a bare token or the full
-// https://.../c/<token> URL a QR code actually encodes. Works for both
-// member and child QR codes. Restricted to the scanning admin/usher's own
-// church — scanning a QR code that happens to belong to a different
-// church's member/child resolves as invalid_token, not a cross-tenant
-// check-in. `ensureAdminOnPremises` requires the scanning device itself to
-// be at the church (once the church has GPS configured).
+// POST /api/attendance/scan  { token }  — used by the kiosk camera scanner.
+// Accepts either a bare token or the full https://.../c/<token> URL a QR
+// code actually encodes. Works for both member and child QR codes.
+// Restricted to the scanning admin/usher's own church — scanning a QR code
+// that happens to belong to a different church's member/child resolves as
+// invalid_token, not a cross-tenant check-in. No GPS requirement on the
+// scanning device — see the note on `/attendance/checkin` above.
 router.post("/attendance/scan", async (req, res) => {
-  if (!(await ensureAdminOnPremises(req, res))) return;
   const raw = String(req.body?.token || "").trim();
   if (!raw) return res.status(400).json({ ok: false, reason: "invalid_token" });
   const token = raw.includes("/c/") ? raw.split("/c/").pop().split(/[?#]/)[0] : raw;
@@ -177,9 +159,8 @@ router.post("/attendance/scan", async (req, res) => {
   res.json(result);
 });
 
-// POST /api/attendance/manual  { memberId | childId, serviceId, lat, lng }
+// POST /api/attendance/manual  { memberId | childId, serviceId }
 router.post("/attendance/manual", async (req, res) => {
-  if (!(await ensureAdminOnPremises(req, res))) return;
   const { memberId, childId, serviceId } = req.body || {};
   if ((!memberId && !childId) || !serviceId) {
     return res.status(400).json({ ok: false, reason: "invalid_token" });
@@ -192,22 +173,12 @@ router.post("/attendance/manual", async (req, res) => {
   res.json(result);
 });
 
-// POST /api/attendance/visitor  { serviceId, name, phone, lat, lng }
+// POST /api/attendance/visitor  { serviceId, name, phone }
 router.post("/attendance/visitor", async (req, res) => {
   const { serviceId, phone } = req.body || {};
   const name = String(req.body?.name || "").trim();
   if (!serviceId || !name) {
     return res.status(400).json({ error: "Visitor name is required." });
-  }
-  const premises = await verifyAdminAtChurch(req.user.churchId, Number(req.body?.lat), Number(req.body?.lng));
-  if (!premises.ok) {
-    return res.status(403).json({
-      error:
-        premises.reason === "location_required"
-          ? "Enable location access to check in a visitor."
-          : "You must be at the church to check in a visitor.",
-      reason: premises.reason,
-    });
   }
   try {
     await checkInVisitor(serviceId, name, phone || "", req.user.churchId, { id: req.user.id, name: req.user.name });
