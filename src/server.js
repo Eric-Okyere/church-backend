@@ -12,6 +12,9 @@ const attendanceRoutes = require("./routes/attendance");
 const venueRoutes = require("./routes/venue");
 const analyticsRoutes = require("./routes/analytics");
 const platformRoutes = require("./routes/platform");
+const titheRoutes = require("./routes/tithes");
+const assetRoutes = require("./routes/assets");
+const levyRoutes = require("./routes/levies");
 
 const app = express();
 
@@ -60,6 +63,9 @@ app.get("/health", (req, res) =>
       "password-reset",
       "church-contact-phone",
       "email-verification-before-signin",
+      "member-tithes",
+      "church-asset-inventory",
+      "named-levies-with-progress",
     ],
   })
 );
@@ -79,6 +85,9 @@ app.use("/api/analytics", analyticsRoutes);
 // owns "/api/platform" and nothing else, so its own router.use(requireAuth,
 // requirePlatformAdmin) can never accidentally gate an unrelated route.
 app.use("/api/platform", platformRoutes);
+app.use("/api/tithes", titheRoutes);
+app.use("/api/assets", assetRoutes);
+app.use("/api/levies", levyRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
